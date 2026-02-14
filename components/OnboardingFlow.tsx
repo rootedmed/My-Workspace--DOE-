@@ -1,11 +1,13 @@
 "use client";
 
-import { FormEvent, useMemo, useState } from "react";
+import { FormEvent, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
 import type { DecisionTrack, MatchResult, OnboardingProfile } from "@/lib/domain/types";
 import { getClosureTemplate, getNudge } from "@/lib/decision-track/stateMachine";
 import { withCsrfHeaders } from "@/components/auth/csrf";
 
 type WizardMode = "fast" | "deep";
+type AppTab = "discover" | "matches" | "profile";
 
 type WizardValues = {
   firstName: string;
@@ -44,6 +46,22 @@ type DecisionTrackResponse = {
   prompt: string;
 };
 
+type QuestionOption = {
+  label: string;
+  value: string;
+};
+
+type QuestionDef = {
+  id: string;
+  title: string;
+  description: string;
+  kind: "text" | "select" | "number";
+  field: string;
+  min?: number;
+  max?: number;
+  options?: QuestionOption[];
+};
+
 const initialValues: WizardValues = {
   firstName: "",
   ageRange: "31_37",
@@ -66,36 +84,263 @@ const initialValues: WizardValues = {
   noveltyPreference: "3"
 };
 
-function LikertField({
-  label,
-  value,
-  onChange
-}: {
-  label: string;
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  return (
-    <label>
-      {label}
-      <select value={value} onChange={(event) => onChange(event.target.value)}>
-        <option value="1">1 - rarely true</option>
-        <option value="2">2</option>
-        <option value="3">3</option>
-        <option value="4">4</option>
-        <option value="5">5 - often true</option>
-      </select>
-    </label>
-  );
-}
+const likertOptions: QuestionOption[] = [
+  { label: "1 - Rarely true", value: "1" },
+  { label: "2", value: "2" },
+  { label: "3", value: "3" },
+  { label: "4", value: "4" },
+  { label: "5 - Often true", value: "5" }
+];
+
+const fastQuestions: QuestionDef[] = [
+  {
+    id: "firstName",
+    title: "First name",
+    description: "How should your matches know you?",
+    kind: "text",
+    field: "firstName"
+  },
+  {
+    id: "lookingFor",
+    title: "What are you looking for?",
+    description: "We use this to calibrate intent alignment.",
+    kind: "select",
+    field: "lookingFor",
+    options: [
+      { label: "Marriage-minded", value: "marriage_minded" },
+      { label: "Serious relationship", value: "serious_relationship" },
+      { label: "Exploring", value: "exploring" }
+    ]
+  },
+  {
+    id: "timelineMonths",
+    title: "Preferred commitment timeline (months)",
+    description: "A realistic horizon helps reduce mismatched pacing.",
+    kind: "number",
+    field: "timelineMonths",
+    min: 3,
+    max: 60
+  }
+];
+
+const deepQuestions: QuestionDef[] = [
+  {
+    id: "ageRange",
+    title: "Age range",
+    description: "Choose your preferred match range.",
+    kind: "select",
+    field: "ageRange",
+    options: [
+      { label: "24-30", value: "24_30" },
+      { label: "31-37", value: "31_37" },
+      { label: "38-45", value: "38_45" },
+      { label: "46+", value: "46_plus" }
+    ]
+  },
+  {
+    id: "locationPreference",
+    title: "Location preference",
+    description: "Distance flexibility impacts match depth.",
+    kind: "select",
+    field: "locationPreference",
+    options: [
+      { label: "Same city", value: "same_city" },
+      { label: "Relocatable", value: "relocatable" },
+      { label: "Remote okay", value: "remote_ok" }
+    ]
+  },
+  {
+    id: "readiness",
+    title: "Commitment readiness (1-5)",
+    description: "How ready are you for a long-term commitment now?",
+    kind: "number",
+    field: "readiness",
+    min: 1,
+    max: 5
+  },
+  {
+    id: "weeklyCapacity",
+    title: "Weekly dating capacity",
+    description: "How many quality dates can you realistically sustain?",
+    kind: "number",
+    field: "weeklyCapacity",
+    min: 1,
+    max: 7
+  },
+  {
+    id: "anxious-1",
+    title: "I worry about losing connection.",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "attachmentAnxiety.0",
+    options: likertOptions
+  },
+  {
+    id: "anxious-2",
+    title: "I need reassurance when plans feel uncertain.",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "attachmentAnxiety.1",
+    options: likertOptions
+  },
+  {
+    id: "avoidant-1",
+    title: "I need space before discussing intense feelings.",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "attachmentAvoidance.1",
+    options: likertOptions
+  },
+  {
+    id: "repair",
+    title: "I actively repair after conflict.",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "repairAfterConflict",
+    options: likertOptions
+  },
+  {
+    id: "pause",
+    title: "I pause before reacting emotionally.",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "pauseBeforeReacting",
+    options: likertOptions
+  },
+  {
+    id: "startup",
+    title: "I start difficult conversations gently.",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "startupSoftness",
+    options: likertOptions
+  },
+  {
+    id: "calm",
+    title: "I stay calm under stress.",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "calmUnderStress",
+    options: likertOptions
+  },
+  {
+    id: "openness",
+    title: "Openness to new ideas",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "openness",
+    options: likertOptions
+  },
+  {
+    id: "conscientiousness",
+    title: "Conscientiousness",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "conscientiousness",
+    options: likertOptions
+  },
+  {
+    id: "extraversion",
+    title: "Extraversion",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "extraversion",
+    options: likertOptions
+  },
+  {
+    id: "agreeableness",
+    title: "Agreeableness",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "agreeableness",
+    options: likertOptions
+  },
+  {
+    id: "stability",
+    title: "Emotional stability",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "emotionalStability",
+    options: likertOptions
+  },
+  {
+    id: "novelty",
+    title: "Novelty preference",
+    description: "Choose the option that best reflects your baseline.",
+    kind: "select",
+    field: "noveltyPreference",
+    options: likertOptions
+  }
+];
 
 type OnboardingFlowProps = {
   userId: string;
+  firstName?: string | null;
 };
 
-export function OnboardingFlow({ userId }: OnboardingFlowProps) {
+function setFieldValue(values: WizardValues, field: string, nextValue: string): WizardValues {
+  if (!field.includes(".")) {
+    return { ...values, [field]: nextValue } as WizardValues;
+  }
+
+  const [root, indexToken] = field.split(".");
+  const index = Number(indexToken);
+
+  if (root === "attachmentAnxiety") {
+    const next = [...values.attachmentAnxiety] as [string, string, string];
+    next[index] = nextValue;
+    return { ...values, attachmentAnxiety: next };
+  }
+
+  if (root === "attachmentAvoidance") {
+    const next = [...values.attachmentAvoidance] as [string, string, string];
+    next[index] = nextValue;
+    return { ...values, attachmentAvoidance: next };
+  }
+
+  return values;
+}
+
+function getFieldValue(values: WizardValues, field: string): string {
+  if (!field.includes(".")) {
+    return (values[field as keyof WizardValues] as string | undefined) ?? "";
+  }
+
+  const [root, indexToken] = field.split(".");
+  const index = Number(indexToken);
+
+  if (root === "attachmentAnxiety") {
+    return values.attachmentAnxiety[index] ?? "";
+  }
+
+  if (root === "attachmentAvoidance") {
+    return values.attachmentAvoidance[index] ?? "";
+  }
+
+  return "";
+}
+
+function toLabel(value: string): string {
+  return value
+    .split("_")
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function scoreLabel(score: number): string {
+  if (score >= 70) {
+    return "Strong";
+  }
+  if (score >= 50) {
+    return "Balanced";
+  }
+  return "Developing";
+}
+
+export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
+  const [tab, setTab] = useState<AppTab>("discover");
   const [mode, setMode] = useState<WizardMode>("fast");
-  const [step, setStep] = useState(1);
+  const [questionIndex, setQuestionIndex] = useState(0);
   const [values, setValues] = useState<WizardValues>(initialValues);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -104,27 +349,41 @@ export function OnboardingFlow({ userId }: OnboardingFlowProps) {
   const [track, setTrack] = useState<DecisionTrackResponse | null>(null);
   const [savedBanner, setSavedBanner] = useState<string | null>(null);
 
-  const totalSteps = mode === "fast" ? 3 : 4;
+  const questions = useMemo(() => {
+    if (mode === "fast") {
+      return fastQuestions;
+    }
+    return [...fastQuestions, ...deepQuestions];
+  }, [mode]);
+
+  const currentQuestion = questions[questionIndex] ?? questions[0]!;
+  const progress = ((questionIndex + 1) / questions.length) * 100;
+
+  useEffect(() => {
+    setQuestionIndex((prev) => Math.min(prev, questions.length - 1));
+  }, [questions.length]);
 
   const canContinue = useMemo(() => {
-    if (step === 1) {
-      return values.firstName.trim().length >= 2;
+    const value = getFieldValue(values, currentQuestion.field).trim();
+    if (currentQuestion.field === "firstName") {
+      return value.length >= 2;
     }
-    return true;
-  }, [step, values.firstName]);
 
-  const stepTitle = useMemo(() => {
-    if (step === 1) {
-      return "Intent and timeline";
+    if (currentQuestion.kind === "number") {
+      const parsed = Number(value);
+      if (Number.isNaN(parsed)) {
+        return false;
+      }
+      if (typeof currentQuestion.min === "number" && parsed < currentQuestion.min) {
+        return false;
+      }
+      if (typeof currentQuestion.max === "number" && parsed > currentQuestion.max) {
+        return false;
+      }
     }
-    if (step === 2) {
-      return "Lifestyle fit";
-    }
-    if (step === 3) {
-      return "Patterns and preferences";
-    }
-    return "Deep dive for better precision";
-  }, [step]);
+
+    return value.length > 0;
+  }, [currentQuestion, values]);
 
   async function submitOnboarding(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -176,6 +435,7 @@ export function OnboardingFlow({ userId }: OnboardingFlowProps) {
       const data = (await response.json()) as OnboardingResponse;
       setSaved(data);
       setSavedBanner("Onboarding saved successfully.");
+      setTab("matches");
     } catch {
       setError("Request failed. Please try again.");
     } finally {
@@ -184,6 +444,7 @@ export function OnboardingFlow({ userId }: OnboardingFlowProps) {
   }
 
   async function loadMatches() {
+    setError(null);
     const response = await fetch("/api/matches/preview");
     if (!response.ok) {
       setError("Could not load matches right now.");
@@ -194,6 +455,7 @@ export function OnboardingFlow({ userId }: OnboardingFlowProps) {
   }
 
   async function startTrack() {
+    setError(null);
     const response = await fetch("/api/decision-track/start", {
       method: "POST",
       headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
@@ -211,6 +473,7 @@ export function OnboardingFlow({ userId }: OnboardingFlowProps) {
     if (!track?.track.id) {
       return;
     }
+    setError(null);
     const response = await fetch("/api/decision-track/advance", {
       method: "POST",
       headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
@@ -237,331 +500,348 @@ export function OnboardingFlow({ userId }: OnboardingFlowProps) {
     window.location.href = "/login";
   }
 
+  const profile = saved?.profile;
+  const displayName = (profile?.firstName ?? values.firstName.trim()) || (firstName ?? "You");
+
   return (
-    <section className="panel">
-      <h2>Adaptive Onboarding</h2>
-      <p className="muted">
-        User: {userId}. This is a non-clinical reflection tool and does not provide diagnosis or therapy.
-      </p>
-      <div className="actions">
-        <button type="button" onClick={signOut}>
-          Sign out
+    <section className="app-shell">
+      <header className="app-header">
+        <p className="eyebrow">Discover</p>
+        <h1>Hey, {displayName}</h1>
+        <p className="muted">Intent-first dating with calm, premium pacing.</p>
+      </header>
+
+      <AnimatePresence mode="wait" initial={false}>
+        <motion.div
+          key={tab}
+          className="app-screen"
+          initial={{ opacity: 0, y: 10 }}
+          animate={{ opacity: 1, y: 0 }}
+          exit={{ opacity: 0, y: -10 }}
+          transition={{ duration: 0.2, ease: "easeOut" }}
+        >
+          {tab === "discover" ? (
+            <div className="stack">
+              <section className="panel panel-tight">
+                <div className="mode-picker" role="radiogroup" aria-label="Setup mode">
+                  <button
+                    type="button"
+                    className={mode === "fast" ? "mode-chip active" : "mode-chip"}
+                    onClick={() => setMode("fast")}
+                    aria-pressed={mode === "fast"}
+                  >
+                    Fast
+                  </button>
+                  <button
+                    type="button"
+                    className={mode === "deep" ? "mode-chip active" : "mode-chip"}
+                    onClick={() => setMode("deep")}
+                    aria-pressed={mode === "deep"}
+                  >
+                    Deep
+                  </button>
+                </div>
+                <p className="muted small">{mode === "fast" ? "3-card sprint" : "20-card precision onboarding"}</p>
+              </section>
+
+              <form onSubmit={submitOnboarding} className="stack">
+                <section className="panel onboarding-card">
+                  <div className="progress-wrap" aria-hidden="true">
+                    <span className="progress-text">
+                      Card {questionIndex + 1} of {questions.length}
+                    </span>
+                    <div className="progress-track">
+                      <motion.span
+                        className="progress-fill"
+                        initial={false}
+                        animate={{ width: `${progress}%` }}
+                        transition={{ duration: 0.2, ease: "easeOut" }}
+                      />
+                    </div>
+                  </div>
+
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.div
+                      key={currentQuestion.id}
+                      className="question-card"
+                      initial={{ opacity: 0, x: 20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      exit={{ opacity: 0, x: -20 }}
+                      transition={{ duration: 0.2, ease: "easeOut" }}
+                    >
+                      <label className="question-label" htmlFor={currentQuestion.id}>
+                        {currentQuestion.title}
+                      </label>
+                      <p className="muted">{currentQuestion.description}</p>
+                      {currentQuestion.kind === "text" ? (
+                        <input
+                          id={currentQuestion.id}
+                          value={getFieldValue(values, currentQuestion.field)}
+                          onChange={(event) =>
+                            setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
+                          }
+                          autoComplete="given-name"
+                        />
+                      ) : null}
+                      {currentQuestion.kind === "number" ? (
+                        <input
+                          id={currentQuestion.id}
+                          type="number"
+                          min={currentQuestion.min}
+                          max={currentQuestion.max}
+                          value={getFieldValue(values, currentQuestion.field)}
+                          onChange={(event) =>
+                            setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
+                          }
+                        />
+                      ) : null}
+                      {currentQuestion.kind === "select" ? (
+                        <select
+                          id={currentQuestion.id}
+                          value={getFieldValue(values, currentQuestion.field)}
+                          onChange={(event) =>
+                            setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
+                          }
+                        >
+                          {currentQuestion.options?.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      ) : null}
+
+                      {currentQuestion.field === "firstName" &&
+                      values.firstName.trim().length > 0 &&
+                      values.firstName.trim().length < 2 ? (
+                        <p className="inline-error">Name should be at least 2 characters.</p>
+                      ) : null}
+                    </motion.div>
+                  </AnimatePresence>
+
+                  <div className="actions">
+                    <button
+                      type="button"
+                      disabled={questionIndex === 0 || loading}
+                      onClick={() => setQuestionIndex((prev) => prev - 1)}
+                      className="ghost"
+                    >
+                      Previous
+                    </button>
+                    {questionIndex < questions.length - 1 ? (
+                      <button
+                        type="button"
+                        disabled={!canContinue || loading}
+                        onClick={() => setQuestionIndex((prev) => prev + 1)}
+                      >
+                        Continue
+                      </button>
+                    ) : (
+                      <button type="submit" disabled={loading || !canContinue}>
+                        {loading ? "Saving..." : "Save onboarding"}
+                      </button>
+                    )}
+                  </div>
+                </section>
+              </form>
+
+              {savedBanner ? <p className="inline-ok">{savedBanner}</p> : null}
+              <section className="panel panel-tight">
+                <div className="actions">
+                  <button type="button" className="ghost" onClick={signOut}>
+                    Sign out
+                  </button>
+                </div>
+                <p className="muted tiny">User ID: {userId}</p>
+              </section>
+            </div>
+          ) : null}
+
+          {tab === "matches" ? (
+            <div className="stack">
+              <section className="panel">
+                <h2>Match Preview</h2>
+                <p className="muted">Compatibility previews remain read-only in this phase.</p>
+                <div className="actions">
+                  <button type="button" onClick={loadMatches} disabled={!saved}>
+                    See compatibility preview
+                  </button>
+                  <button type="button" onClick={startTrack} disabled={!saved}>
+                    Start 14-day decision track
+                  </button>
+                </div>
+              </section>
+
+              {!saved ? (
+                <section className="panel panel-tight">
+                  <p className="muted">Complete onboarding in Discover to unlock matches.</p>
+                </section>
+              ) : null}
+
+              {saved ? (
+                <section className="panel">
+                  <h3>Your tendencies</h3>
+                  <ul className="list">
+                    {saved.tendenciesSummary.map((line) => (
+                      <li key={line}>{line}</li>
+                    ))}
+                  </ul>
+                </section>
+              ) : null}
+
+              {matches.length > 0 ? (
+                <section className="stack">
+                  {matches.map((match) => (
+                    <article key={match.candidateId} className="panel">
+                      <p className="eyebrow">{match.totalScore}/100 match</p>
+                      <h3>{match.candidateFirstName}</h3>
+                      <p className="muted">Top fit signals</p>
+                      <ul className="list">
+                        {match.topFitReasons.map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                      </ul>
+                      <p className="muted">Potential friction points</p>
+                      <ul className="list">
+                        {match.potentialFrictionPoints.map((reason) => (
+                          <li key={reason}>{reason}</li>
+                        ))}
+                      </ul>
+                      <div className="actions">
+                        <button type="button" onClick={() => sendCalibration(5)}>
+                          Felt right
+                        </button>
+                        <button type="button" className="ghost" onClick={() => sendCalibration(2)}>
+                          Felt off
+                        </button>
+                      </div>
+                    </article>
+                  ))}
+                </section>
+              ) : null}
+
+              {track ? (
+                <section className="panel">
+                  <h3>Decision Track</h3>
+                  <p className="muted">
+                    State: {track.track.state} | Day: {track.track.day}
+                  </p>
+                  <p>{track.prompt}</p>
+                  <p className="muted">{getNudge(track.track.state, track.track.day)}</p>
+                  <div className="actions">
+                    <button type="button" onClick={() => advanceTrack("complete_reflection")}>
+                      Complete reflection
+                    </button>
+                    <button type="button" className="ghost" onClick={() => advanceTrack("advance_day")}>
+                      Advance day
+                    </button>
+                  </div>
+                  <details>
+                    <summary>Respectful close-the-loop templates</summary>
+                    <ul className="list">
+                      <li>{getClosureTemplate("continue")}</li>
+                      <li>{getClosureTemplate("pause")}</li>
+                      <li>{getClosureTemplate("close")}</li>
+                    </ul>
+                  </details>
+                </section>
+              ) : null}
+            </div>
+          ) : null}
+
+          {tab === "profile" ? (
+            <div className="stack">
+              <section className="panel profile-hero">
+                <p className="eyebrow">Profile</p>
+                <h2>{displayName}</h2>
+                <p className="muted">Intent: {toLabel(profile?.intent.lookingFor ?? values.lookingFor)}</p>
+              </section>
+
+              <section className="panel">
+                <h3>Prompts</h3>
+                <div className="prompt-grid">
+                  <article className="prompt-card">
+                    <p className="prompt-q">My relationship pace works best when...</p>
+                    <p>
+                      we align on a {profile?.intent.timelineMonths ?? Number(values.timelineMonths)}-month timeline and
+                      keep dating consistent.
+                    </p>
+                  </article>
+                  <article className="prompt-card">
+                    <p className="prompt-q">A green flag for me is...</p>
+                    <p>
+                      someone who scores {scoreLabel(profile?.tendencies.conflictRepair ?? Number(values.repairAfterConflict) * 20)} in
+                      repair habits after conflict.
+                    </p>
+                  </article>
+                  <article className="prompt-card">
+                    <p className="prompt-q">I feel most connected when...</p>
+                    <p>
+                      both people respect emotional pacing and communication style ({toLabel(
+                        profile?.locationPreference ?? values.locationPreference
+                      )}).
+                    </p>
+                  </article>
+                </div>
+              </section>
+
+              <section className="panel">
+                <h3>Structured Snapshot</h3>
+                <div className="stats-grid">
+                  <article className="metric">
+                    <span>Readiness</span>
+                    <strong>{profile?.intent.readiness ?? Number(values.readiness)}/5</strong>
+                  </article>
+                  <article className="metric">
+                    <span>Weekly capacity</span>
+                    <strong>{profile?.intent.weeklyCapacity ?? Number(values.weeklyCapacity)} dates</strong>
+                  </article>
+                  <article className="metric">
+                    <span>Attachment anxiety</span>
+                    <strong>{profile?.tendencies.attachmentAnxiety ?? Number(values.attachmentAnxiety[0]) * 20}</strong>
+                  </article>
+                  <article className="metric">
+                    <span>Emotional regulation</span>
+                    <strong>{profile?.tendencies.emotionalRegulation ?? Number(values.pauseBeforeReacting) * 20}</strong>
+                  </article>
+                </div>
+              </section>
+            </div>
+          ) : null}
+
+          {error ? (
+            <section className="panel panel-tight">
+              <p role="alert" className="inline-error">
+                {error}
+              </p>
+            </section>
+          ) : null}
+        </motion.div>
+      </AnimatePresence>
+
+      <nav className="bottom-nav" aria-label="Main">
+        <button
+          type="button"
+          className={tab === "discover" ? "nav-item active" : "nav-item"}
+          onClick={() => setTab("discover")}
+        >
+          <span>Discover</span>
         </button>
-      </div>
-
-      <div className="panel">
-        <h3>Setup mode</h3>
-        <label>
-          <input type="radio" checked={mode === "fast"} onChange={() => setMode("fast")} />
-          Fast setup (fewer questions)
-        </label>
-        <label>
-          <input type="radio" checked={mode === "deep"} onChange={() => setMode("deep")} />
-          Deep dive (higher precision)
-        </label>
-      </div>
-
-      <h3>{stepTitle}</h3>
-      <p className="muted">
-        Step {step} of {totalSteps}
-      </p>
-      {savedBanner ? <p className="inline-ok">{savedBanner}</p> : null}
-
-      <form onSubmit={submitOnboarding}>
-        <div key={`${mode}-${step}`} className="step-card">
-          {step === 1 ? (
-          <>
-            <label>
-              First name
-              <input
-                value={values.firstName}
-                onChange={(event) => setValues((prev) => ({ ...prev, firstName: event.target.value }))}
-              />
-            </label>
-            {values.firstName.trim().length > 0 && values.firstName.trim().length < 2 ? (
-              <p className="inline-error">Name should be at least 2 characters.</p>
-            ) : null}
-            <label>
-              What are you looking for?
-              <select
-                value={values.lookingFor}
-                onChange={(event) =>
-                  setValues((prev) => ({
-                    ...prev,
-                    lookingFor: event.target.value as WizardValues["lookingFor"]
-                  }))
-                }
-              >
-                <option value="marriage_minded">Marriage-minded</option>
-                <option value="serious_relationship">Serious relationship</option>
-                <option value="exploring">Exploring</option>
-              </select>
-            </label>
-            <label>
-              Preferred commitment timeline (months)
-              <input
-                type="number"
-                min={3}
-                max={60}
-                value={values.timelineMonths}
-                onChange={(event) =>
-                  setValues((prev) => ({ ...prev, timelineMonths: event.target.value }))
-                }
-              />
-            </label>
-          </>
-          ) : null}
-
-          {step === 2 ? (
-          <>
-            <label>
-              Commitment readiness (1-5)
-              <input
-                type="number"
-                min={1}
-                max={5}
-                value={values.readiness}
-                onChange={(event) => setValues((prev) => ({ ...prev, readiness: event.target.value }))}
-              />
-            </label>
-            <label>
-              Weekly dating capacity
-              <input
-                type="number"
-                min={1}
-                max={7}
-                value={values.weeklyCapacity}
-                onChange={(event) =>
-                  setValues((prev) => ({ ...prev, weeklyCapacity: event.target.value }))
-                }
-              />
-            </label>
-            <label>
-              Age range
-              <select
-                value={values.ageRange}
-                onChange={(event) =>
-                  setValues((prev) => ({ ...prev, ageRange: event.target.value as WizardValues["ageRange"] }))
-                }
-              >
-                <option value="24_30">24-30</option>
-                <option value="31_37">31-37</option>
-                <option value="38_45">38-45</option>
-                <option value="46_plus">46+</option>
-              </select>
-            </label>
-            <label>
-              Location preference
-              <select
-                value={values.locationPreference}
-                onChange={(event) =>
-                  setValues((prev) => ({
-                    ...prev,
-                    locationPreference: event.target.value as WizardValues["locationPreference"]
-                  }))
-                }
-              >
-                <option value="same_city">Same city</option>
-                <option value="relocatable">Relocatable</option>
-                <option value="remote_ok">Remote okay</option>
-              </select>
-            </label>
-          </>
-          ) : null}
-
-          {step === 3 ? (
-          <>
-            <LikertField
-              label="I worry about losing connection."
-              value={values.attachmentAnxiety[0]}
-              onChange={(next) =>
-                setValues((prev) => ({
-                  ...prev,
-                  attachmentAnxiety: [next, prev.attachmentAnxiety[1], prev.attachmentAnxiety[2]]
-                }))
-              }
-            />
-            <LikertField
-              label="I need reassurance when plans feel uncertain."
-              value={values.attachmentAnxiety[1]}
-              onChange={(next) =>
-                setValues((prev) => ({
-                  ...prev,
-                  attachmentAnxiety: [prev.attachmentAnxiety[0], next, prev.attachmentAnxiety[2]]
-                }))
-              }
-            />
-            <LikertField
-              label="I need space before discussing intense feelings."
-              value={values.attachmentAvoidance[1]}
-              onChange={(next) =>
-                setValues((prev) => ({
-                  ...prev,
-                  attachmentAvoidance: [prev.attachmentAvoidance[0], next, prev.attachmentAvoidance[2]]
-                }))
-              }
-            />
-            <LikertField
-              label="I actively repair after conflict."
-              value={values.repairAfterConflict}
-              onChange={(next) => setValues((prev) => ({ ...prev, repairAfterConflict: next }))}
-            />
-            <LikertField
-              label="I pause before reacting emotionally."
-              value={values.pauseBeforeReacting}
-              onChange={(next) => setValues((prev) => ({ ...prev, pauseBeforeReacting: next }))}
-            />
-          </>
-          ) : null}
-
-          {mode === "deep" && step === 4 ? (
-          <>
-            <LikertField
-              label="I start difficult conversations gently."
-              value={values.startupSoftness}
-              onChange={(next) => setValues((prev) => ({ ...prev, startupSoftness: next }))}
-            />
-            <LikertField
-              label="I stay calm under stress."
-              value={values.calmUnderStress}
-              onChange={(next) => setValues((prev) => ({ ...prev, calmUnderStress: next }))}
-            />
-            <LikertField
-              label="Openness to new ideas"
-              value={values.openness}
-              onChange={(next) => setValues((prev) => ({ ...prev, openness: next }))}
-            />
-            <LikertField
-              label="Conscientiousness"
-              value={values.conscientiousness}
-              onChange={(next) => setValues((prev) => ({ ...prev, conscientiousness: next }))}
-            />
-            <LikertField
-              label="Extraversion"
-              value={values.extraversion}
-              onChange={(next) => setValues((prev) => ({ ...prev, extraversion: next }))}
-            />
-            <LikertField
-              label="Agreeableness"
-              value={values.agreeableness}
-              onChange={(next) => setValues((prev) => ({ ...prev, agreeableness: next }))}
-            />
-            <LikertField
-              label="Emotional stability"
-              value={values.emotionalStability}
-              onChange={(next) => setValues((prev) => ({ ...prev, emotionalStability: next }))}
-            />
-            <LikertField
-              label="Novelty preference"
-              value={values.noveltyPreference}
-              onChange={(next) => setValues((prev) => ({ ...prev, noveltyPreference: next }))}
-            />
-          </>
-          ) : null}
-        </div>
-
-        <div className="actions">
-          <button type="button" disabled={step === 1 || loading} onClick={() => setStep((prev) => prev - 1)}>
-            Edit previous
-          </button>
-          {step < totalSteps ? (
-            <button type="button" disabled={!canContinue || loading} onClick={() => setStep((prev) => prev + 1)}>
-              Continue
-            </button>
-          ) : (
-            <button type="submit" disabled={loading}>
-              {loading ? "Saving..." : "Save onboarding"}
-            </button>
-          )}
-        </div>
-      </form>
-
-      {error ? <p role="alert">{error}</p> : null}
-
-      {saved ? (
-        <div className="panel">
-          <h3>Your tendencies</h3>
-          <ul className="list">
-            {saved.tendenciesSummary.map((line) => (
-              <li key={line}>{line}</li>
-            ))}
-          </ul>
-          <div className="actions">
-            <button type="button" onClick={loadMatches}>
-              See compatibility preview
-            </button>
-            <button type="button" onClick={startTrack}>
-              Start 14-day decision track
-            </button>
-          </div>
-        </div>
-      ) : null}
-
-      {matches.length > 0 ? (
-        <div className="panel">
-          <h3>Top compatibility previews</h3>
-          {matches.map((match) => (
-            <article key={match.candidateId} className="track-day">
-              <strong>
-                {match.candidateFirstName} - {match.totalScore}/100
-              </strong>
-              <p className="muted">Top fit signals:</p>
-              <ul className="list">
-                {match.topFitReasons.map((reason) => (
-                  <li key={reason}>{reason}</li>
-                ))}
-              </ul>
-              <p className="muted">Potential friction points:</p>
-              <ul className="list">
-                {match.potentialFrictionPoints.map((reason) => (
-                  <li key={reason}>{reason}</li>
-                ))}
-              </ul>
-              <p className="muted">Suggested prompts:</p>
-              <ul className="list">
-                {match.conversationPrompts.map((prompt) => (
-                  <li key={prompt}>{prompt}</li>
-                ))}
-              </ul>
-              <div className="actions">
-                <button type="button" onClick={() => sendCalibration(5)}>
-                  Felt right
-                </button>
-                <button type="button" onClick={() => sendCalibration(2)}>
-                  Felt off
-                </button>
-              </div>
-            </article>
-          ))}
-        </div>
-      ) : null}
-
-      {track ? (
-        <div className="panel">
-          <h3>Decision Track</h3>
-          <p>
-            State: {track.track.state} | Day: {track.track.day}
-          </p>
-          <p>{track.prompt}</p>
-          <p className="muted">{getNudge(track.track.state, track.track.day)}</p>
-          <div className="actions">
-            <button type="button" onClick={() => advanceTrack("complete_reflection")}>
-              Complete reflection
-            </button>
-            <button type="button" onClick={() => advanceTrack("advance_day")}>
-              Advance day
-            </button>
-          </div>
-          <details>
-            <summary>Respectful close-the-loop templates</summary>
-            <ul className="list">
-              <li>{getClosureTemplate("continue")}</li>
-              <li>{getClosureTemplate("pause")}</li>
-              <li>{getClosureTemplate("close")}</li>
-            </ul>
-          </details>
-        </div>
-      ) : null}
+        <button
+          type="button"
+          className={tab === "matches" ? "nav-item active" : "nav-item"}
+          onClick={() => setTab("matches")}
+        >
+          <span>Matches</span>
+        </button>
+        <button
+          type="button"
+          className={tab === "profile" ? "nav-item active" : "nav-item"}
+          onClick={() => setTab("profile")}
+        >
+          <span>Profile</span>
+        </button>
+      </nav>
     </section>
   );
 }

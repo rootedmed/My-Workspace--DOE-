@@ -9,11 +9,8 @@ export default async function ProtectedAppPage() {
   }
 
   return (
-    <main>
-      <section className="panel actions">
-        <h1>Welcome, {user.firstName ?? "there"}</h1>
-      </section>
-      <OnboardingFlow userId={user.id} />
+    <main className="app-main">
+      <OnboardingFlow userId={user.id} firstName={user.firstName} />
     </main>
   );
 }
