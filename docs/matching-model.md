@@ -1,116 +1,83 @@
-# Matching Model and Product Flow
+# Matching Model (v1)
 
-## Product Goal
-Build a commitment-first matching workflow that filters for intent and feasibility first, then ranks for relational process compatibility.
+## Model Objectives
+- Commitment-first filtering before compatibility ranking.
+- Explainability by default.
+- Non-clinical language: tendencies and signals, never diagnosis.
 
-## Data Model (MVP, in-memory DB layer)
-
-```ts
-UserProfile {
-  id: string;
-  firstName: string;
-  ageRange: "24_30" | "31_37" | "38_45" | "46_plus";
-  locationPreference: "same_city" | "relocatable" | "remote_ok";
-
-  intent: {
-    lookingFor: "marriage_minded" | "serious_relationship" | "exploring";
-    timelineMonths: number;            // expected commitment horizon
-    readiness: number;                 // 1-5
-    weeklyCapacity: number;            // 1-7 dates/week
-  };
-
-  tendencies: {
-    attachmentAnxiety: number;         // 0-100
-    attachmentAvoidance: number;       // 0-100
-    conflictRepair: number;            // 0-100
-    emotionalRegulation: number;       // 0-100
-    noveltyPreference: number;         // 0-100
-  };
-
-  personality: {
-    openness: number;                  // 0-100
-    conscientiousness: number;         // 0-100
-    extraversion: number;              // 0-100
-    agreeableness: number;             // 0-100
-    emotionalStability: number;        // 0-100
-  };
-
-  createdAt: string;
-}
-
-MatchResult {
-  candidateId: string;
-  totalScore: number;                  // 0-100
-  hardFilterPass: boolean;
-  reasons: string[];
-  componentScores: {
-    intent: number;
-    lifestyle: number;
-    attachment: number;
-    conflictRegulation: number;
-    personality: number;
-    novelty: number;
-  };
-}
-
-DecisionTrack {
-  id: string;
-  userId: string;
-  state: DecisionState;
-  day: number;                         // 1-14
-  reflectionCount: number;
-  createdAt: string;
-  updatedAt: string;
-}
-```
-
-## API Structure (MVP)
+## API Surface (v1)
 - `POST /api/onboarding/complete`
-  - Input: onboarding payload
-  - Output: `{ profile, tendenciesSummary }`
-- `GET /api/matches/preview?userId=...`
-  - Output: ranked candidates and score components
+- `GET /api/matches/preview`
+- `POST /api/matches/calibration`
 - `POST /api/decision-track/start`
-  - Input: `{ userId }`
-  - Output: new track state + day prompt
 - `POST /api/decision-track/advance`
-  - Input: `{ trackId, action }`
-  - Output: updated state + next prompt
-- `GET /api/health`
-  - service health and mock DB health
 
-## Hard Filters vs Dynamic Compatibility
+All endpoints except `/api/health`, `/api/auth/*` require authenticated session.
 
-### Hard filters (must pass)
-1. Intent floor: if either user is `exploring` and other is `marriage_minded` with short timeline, fail.
-2. Timeline incompatibility: large gap in commitment horizon (default > 18 months) fails.
-3. Capacity mismatch: impossible scheduling overlap (very low capacity mismatch) fails.
+## Data Principles
+- Store derived scores only for onboarding analysis.
+- Do not persist raw questionnaire text.
+- Primary persistence in Supabase Postgres; optional raw answers must be encrypted (`raw_answers_encrypted`).
 
-### Dynamic compatibility score (0-100)
-Weighted sum after hard filters:
-- Intent alignment: 25%
-- Lifestyle feasibility: 20%
-- Attachment complementarity: 15%
-- Conflict + emotional regulation: 20%
-- Personality fit: 15%
-- Novelty/stability fit: 5%
+## Hard Filters
+A candidate is rejected if either condition is true:
+1. `abs(user.timelineMonths - candidate.timelineMonths) > 18`
+2. Intent mismatch floor:
+   - `marriage_minded` vs `exploring`
 
-## Scoring Logic
-- Convert Likert responses to normalized 0-100 scales.
-- Use distance penalties for mismatch dimensions (e.g., novelty preference distance).
-- Use asymmetry penalties where relevant (e.g., high anxiety paired with high avoidance).
-- Clamp all components to `[0,100]`.
+## Component Scores
+Each component is normalized to `0..100`:
+- `intent`
+- `lifestyle`
+- `attachment`
+- `conflictRegulation`
+- `personality`
+- `novelty`
+
+## Weighted Score
+Default weights:
+- intent: `0.25`
+- lifestyle: `0.20`
+- attachment: `0.15`
+- conflictRegulation: `0.20`
+- personality: `0.15`
+- novelty: `0.05`
+
+Formula:
+`total = Σ(componentScore_i * weight_i)`
+
+If hard filter fails: `total = 0`.
+
+## Explainability Output
+Per match response:
+- `topFitReasons`: top 3 high-scoring components
+- `potentialFrictionPoints`: lowest 2 components
+- `conversationPrompts`: 2 prompts tied to friction points
+
+This allows users to understand both upside and risk.
+
+## Calibration (User-specific learning)
+Endpoint: `POST /api/matches/calibration`
+Input: `feltRight` (1..5) after interaction.
+
+Behavior:
+- Slightly increases/decreases personal weights for intent and conflict/regulation.
+- Renormalizes all weights to sum to 1.
+- Keeps adjustments small and transparent.
+
+Constraint:
+- No hidden optimization for compulsive engagement.
+- Calibration only improves fit relevance and user control.
 
 ## Decision Track State Machine
-
 States:
 - `not_started`
-- `active_intro` (days 1-3)
-- `active_values` (days 4-7)
-- `active_stress_test` (days 8-11)
-- `active_decision` (days 12-14)
-- `completed`
+- `active_intro` (day 1-3)
+- `active_values` (day 4-7)
+- `active_stress_test` (day 8-11)
+- `active_decision` (day 12-14)
 - `paused`
+- `completed`
 
 Actions:
 - `start`
@@ -120,23 +87,6 @@ Actions:
 - `resume`
 - `finish`
 
-Transition rules:
-1. `not_started --start--> active_intro`
-2. day-based auto phase changes:
-   - day 4 -> `active_values`
-   - day 8 -> `active_stress_test`
-   - day 12 -> `active_decision`
-3. day 14 + `finish` -> `completed`
-4. any active state can `pause`; `paused` can `resume` to previous phase.
-
-## User Progression (MVP)
-1. Complete onboarding (intent + tendencies + profile signals)
-2. Receive ranked preview matches
-3. Start 14-day decision track
-4. Daily reflection + phase nudges
-5. Complete track and produce decision summary
-
-## Safety and Language Rules
-- Never output diagnosis labels.
-- Use terms: "tendencies", "interaction patterns", "fit signals".
-- Communicate uncertainty and context dependence.
+Closure:
+- Day 14 can transition to `completed` via `finish`.
+- Product should encourage respectful close-the-loop decisions.

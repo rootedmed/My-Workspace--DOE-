@@ -41,6 +41,38 @@ export function getPromptForDay(day: number): string {
   return prompts[safeDay - 1] ?? prompts[0];
 }
 
+export function getNudge(state: DecisionState, day: number): string {
+  if (state === "active_intro") {
+    return "Keep this light and clear: one concrete reflection is enough for today.";
+  }
+  if (state === "active_values") {
+    return "Look for consistency between words and weekly actions.";
+  }
+  if (state === "active_stress_test") {
+    return "Discuss one hard topic directly; aim for repair, not perfection.";
+  }
+  if (state === "active_decision") {
+    return "Choose clarity over ambiguity. Respectful closure is always an acceptable outcome.";
+  }
+  if (state === "paused") {
+    return "Paused is valid. Resume when you can engage with steadiness and respect.";
+  }
+  if (day >= 14) {
+    return "You have enough signal to make a clear next-step decision.";
+  }
+  return "Stay consistent and specific.";
+}
+
+export function getClosureTemplate(choice: "continue" | "pause" | "close"): string {
+  if (choice === "continue") {
+    return "I appreciate this connection and would like to continue intentionally. Are you aligned on next steps?";
+  }
+  if (choice === "pause") {
+    return "I value our conversations and need a short pause to reflect. I will follow up by [date].";
+  }
+  return "Thank you for the time and honesty. I do not feel the long-term fit, and I want to close this respectfully.";
+}
+
 export function transitionDecisionTrack(track: DecisionTrack, action: DecisionAction): DecisionTrack {
   const updated: DecisionTrack = { ...track, updatedAt: now() };
 

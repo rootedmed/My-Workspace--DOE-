@@ -35,6 +35,9 @@ describe("compatibility scoring", () => {
     const result = scoreCompatibility(baseProfile, candidate);
     expect(result.hardFilterPass).toBe(true);
     expect(result.totalScore).toBeGreaterThan(80);
+    expect(result.topFitReasons).toHaveLength(3);
+    expect(result.potentialFrictionPoints).toHaveLength(2);
+    expect(result.conversationPrompts).toHaveLength(2);
   });
 
   it("fails hard filters for marriage-vs-exploring mismatch", () => {

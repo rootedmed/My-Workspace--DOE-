@@ -1,4 +1,13 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/auth/session", () => ({
+  getCurrentUser: vi.fn(async () => ({ id: "user-1" }))
+}));
+
+vi.mock("@/lib/security/csrf", () => ({
+  isValidCsrf: vi.fn(() => true)
+}));
+
 import { POST } from "@/app/api/onboarding/complete/route";
 
 describe("POST /api/onboarding/complete", () => {

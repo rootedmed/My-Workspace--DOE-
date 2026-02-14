@@ -2,6 +2,10 @@
 
 import { FormEvent, useMemo, useState } from "react";
 import type { DecisionTrack, MatchResult, OnboardingProfile } from "@/lib/domain/types";
+import { getClosureTemplate, getNudge } from "@/lib/decision-track/stateMachine";
+import { withCsrfHeaders } from "@/components/auth/csrf";
+
+type WizardMode = "fast" | "deep";
 
 type WizardValues = {
   firstName: string;
@@ -62,8 +66,6 @@ const initialValues: WizardValues = {
   noveltyPreference: "3"
 };
 
-const totalSteps = 4;
-
 function LikertField({
   label,
   value,
@@ -87,7 +89,12 @@ function LikertField({
   );
 }
 
-export function OnboardingFlow() {
+type OnboardingFlowProps = {
+  userId: string;
+};
+
+export function OnboardingFlow({ userId }: OnboardingFlowProps) {
+  const [mode, setMode] = useState<WizardMode>("fast");
   const [step, setStep] = useState(1);
   const [values, setValues] = useState<WizardValues>(initialValues);
   const [loading, setLoading] = useState(false);
@@ -95,6 +102,9 @@ export function OnboardingFlow() {
   const [saved, setSaved] = useState<OnboardingResponse | null>(null);
   const [matches, setMatches] = useState<MatchResult[]>([]);
   const [track, setTrack] = useState<DecisionTrackResponse | null>(null);
+  const [savedBanner, setSavedBanner] = useState<string | null>(null);
+
+  const totalSteps = mode === "fast" ? 3 : 4;
 
   const canContinue = useMemo(() => {
     if (step === 1) {
@@ -102,6 +112,19 @@ export function OnboardingFlow() {
     }
     return true;
   }, [step, values.firstName]);
+
+  const stepTitle = useMemo(() => {
+    if (step === 1) {
+      return "Intent and timeline";
+    }
+    if (step === 2) {
+      return "Lifestyle fit";
+    }
+    if (step === 3) {
+      return "Patterns and preferences";
+    }
+    return "Deep dive for better precision";
+  }, [step]);
 
   async function submitOnboarding(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -141,17 +164,18 @@ export function OnboardingFlow() {
     try {
       const response = await fetch("/api/onboarding/complete", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
-        setError("Could not save onboarding. Check your responses and try again.");
+        setError("Could not save onboarding. Please review your entries.");
         return;
       }
 
       const data = (await response.json()) as OnboardingResponse;
       setSaved(data);
+      setSavedBanner("Onboarding saved successfully.");
     } catch {
       setError("Request failed. Please try again.");
     } finally {
@@ -160,13 +184,9 @@ export function OnboardingFlow() {
   }
 
   async function loadMatches() {
-    if (!saved?.profile.id) {
-      return;
-    }
-
-    const response = await fetch(`/api/matches/preview?userId=${saved.profile.id}`);
+    const response = await fetch("/api/matches/preview");
     if (!response.ok) {
-      setError("Could not load match preview.");
+      setError("Could not load matches right now.");
       return;
     }
     const data = (await response.json()) as MatchResponse;
@@ -174,14 +194,10 @@ export function OnboardingFlow() {
   }
 
   async function startTrack() {
-    if (!saved?.profile.id) {
-      return;
-    }
-
     const response = await fetch("/api/decision-track/start", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ userId: saved.profile.id })
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ start: true })
     });
     if (!response.ok) {
       setError("Could not start decision track.");
@@ -195,10 +211,9 @@ export function OnboardingFlow() {
     if (!track?.track.id) {
       return;
     }
-
     const response = await fetch("/api/decision-track/advance", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
       body: JSON.stringify({ trackId: track.track.id, action })
     });
     if (!response.ok) {
@@ -209,15 +224,52 @@ export function OnboardingFlow() {
     setTrack(data);
   }
 
+  async function sendCalibration(feltRight: number) {
+    await fetch("/api/matches/calibration", {
+      method: "POST",
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ feltRight })
+    });
+  }
+
+  async function signOut() {
+    await fetch("/api/auth/logout", { method: "POST", headers: await withCsrfHeaders() });
+    window.location.href = "/login";
+  }
+
   return (
     <section className="panel">
-      <h2>Commitment Onboarding</h2>
+      <h2>Adaptive Onboarding</h2>
+      <p className="muted">
+        User: {userId}. This is a non-clinical reflection tool and does not provide diagnosis or therapy.
+      </p>
+      <div className="actions">
+        <button type="button" onClick={signOut}>
+          Sign out
+        </button>
+      </div>
+
+      <div className="panel">
+        <h3>Setup mode</h3>
+        <label>
+          <input type="radio" checked={mode === "fast"} onChange={() => setMode("fast")} />
+          Fast setup (fewer questions)
+        </label>
+        <label>
+          <input type="radio" checked={mode === "deep"} onChange={() => setMode("deep")} />
+          Deep dive (higher precision)
+        </label>
+      </div>
+
+      <h3>{stepTitle}</h3>
       <p className="muted">
         Step {step} of {totalSteps}
       </p>
+      {savedBanner ? <p className="inline-ok">{savedBanner}</p> : null}
 
       <form onSubmit={submitOnboarding}>
-        {step === 1 ? (
+        <div key={`${mode}-${step}`} className="step-card">
+          {step === 1 ? (
           <>
             <label>
               First name
@@ -226,6 +278,9 @@ export function OnboardingFlow() {
                 onChange={(event) => setValues((prev) => ({ ...prev, firstName: event.target.value }))}
               />
             </label>
+            {values.firstName.trim().length > 0 && values.firstName.trim().length < 2 ? (
+              <p className="inline-error">Name should be at least 2 characters.</p>
+            ) : null}
             <label>
               What are you looking for?
               <select
@@ -243,7 +298,7 @@ export function OnboardingFlow() {
               </select>
             </label>
             <label>
-              Commitment timeline (months)
+              Preferred commitment timeline (months)
               <input
                 type="number"
                 min={3}
@@ -255,9 +310,9 @@ export function OnboardingFlow() {
               />
             </label>
           </>
-        ) : null}
+          ) : null}
 
-        {step === 2 ? (
+          {step === 2 ? (
           <>
             <label>
               Commitment readiness (1-5)
@@ -312,61 +367,39 @@ export function OnboardingFlow() {
               </select>
             </label>
           </>
-        ) : null}
+          ) : null}
 
-        {step === 3 ? (
+          {step === 3 ? (
           <>
             <LikertField
               label="I worry about losing connection."
               value={values.attachmentAnxiety[0]}
               onChange={(next) =>
-                setValues((prev) => ({ ...prev, attachmentAnxiety: [next, prev.attachmentAnxiety[1], prev.attachmentAnxiety[2]] }))
+                setValues((prev) => ({
+                  ...prev,
+                  attachmentAnxiety: [next, prev.attachmentAnxiety[1], prev.attachmentAnxiety[2]]
+                }))
               }
             />
             <LikertField
               label="I need reassurance when plans feel uncertain."
               value={values.attachmentAnxiety[1]}
               onChange={(next) =>
-                setValues((prev) => ({ ...prev, attachmentAnxiety: [prev.attachmentAnxiety[0], next, prev.attachmentAnxiety[2]] }))
-              }
-            />
-            <LikertField
-              label="I feel unsettled when messages slow down."
-              value={values.attachmentAnxiety[2]}
-              onChange={(next) =>
-                setValues((prev) => ({ ...prev, attachmentAnxiety: [prev.attachmentAnxiety[0], prev.attachmentAnxiety[1], next] }))
-              }
-            />
-            <LikertField
-              label="I prefer handling emotional stress privately first."
-              value={values.attachmentAvoidance[0]}
-              onChange={(next) =>
-                setValues((prev) => ({ ...prev, attachmentAvoidance: [next, prev.attachmentAvoidance[1], prev.attachmentAvoidance[2]] }))
+                setValues((prev) => ({
+                  ...prev,
+                  attachmentAnxiety: [prev.attachmentAnxiety[0], next, prev.attachmentAnxiety[2]]
+                }))
               }
             />
             <LikertField
               label="I need space before discussing intense feelings."
               value={values.attachmentAvoidance[1]}
               onChange={(next) =>
-                setValues((prev) => ({ ...prev, attachmentAvoidance: [prev.attachmentAvoidance[0], next, prev.attachmentAvoidance[2]] }))
+                setValues((prev) => ({
+                  ...prev,
+                  attachmentAvoidance: [prev.attachmentAvoidance[0], next, prev.attachmentAvoidance[2]]
+                }))
               }
-            />
-            <LikertField
-              label="I avoid vulnerability until trust is strongly established."
-              value={values.attachmentAvoidance[2]}
-              onChange={(next) =>
-                setValues((prev) => ({ ...prev, attachmentAvoidance: [prev.attachmentAvoidance[0], prev.attachmentAvoidance[1], next] }))
-              }
-            />
-          </>
-        ) : null}
-
-        {step === 4 ? (
-          <>
-            <LikertField
-              label="I start difficult conversations gently."
-              value={values.startupSoftness}
-              onChange={(next) => setValues((prev) => ({ ...prev, startupSoftness: next }))}
             />
             <LikertField
               label="I actively repair after conflict."
@@ -374,14 +407,24 @@ export function OnboardingFlow() {
               onChange={(next) => setValues((prev) => ({ ...prev, repairAfterConflict: next }))}
             />
             <LikertField
-              label="I stay calm under stress."
-              value={values.calmUnderStress}
-              onChange={(next) => setValues((prev) => ({ ...prev, calmUnderStress: next }))}
-            />
-            <LikertField
               label="I pause before reacting emotionally."
               value={values.pauseBeforeReacting}
               onChange={(next) => setValues((prev) => ({ ...prev, pauseBeforeReacting: next }))}
+            />
+          </>
+          ) : null}
+
+          {mode === "deep" && step === 4 ? (
+          <>
+            <LikertField
+              label="I start difficult conversations gently."
+              value={values.startupSoftness}
+              onChange={(next) => setValues((prev) => ({ ...prev, startupSoftness: next }))}
+            />
+            <LikertField
+              label="I stay calm under stress."
+              value={values.calmUnderStress}
+              onChange={(next) => setValues((prev) => ({ ...prev, calmUnderStress: next }))}
             />
             <LikertField
               label="Openness to new ideas"
@@ -414,11 +457,12 @@ export function OnboardingFlow() {
               onChange={(next) => setValues((prev) => ({ ...prev, noveltyPreference: next }))}
             />
           </>
-        ) : null}
+          ) : null}
+        </div>
 
         <div className="actions">
           <button type="button" disabled={step === 1 || loading} onClick={() => setStep((prev) => prev - 1)}>
-            Back
+            Edit previous
           </button>
           {step < totalSteps ? (
             <button type="button" disabled={!canContinue || loading} onClick={() => setStep((prev) => prev + 1)}>
@@ -436,8 +480,7 @@ export function OnboardingFlow() {
 
       {saved ? (
         <div className="panel">
-          <h3>Profile Saved</h3>
-          <p className="muted">User ID: {saved.profile.id}</p>
+          <h3>Your tendencies</h3>
           <ul className="list">
             {saved.tendenciesSummary.map((line) => (
               <li key={line}>{line}</li>
@@ -445,7 +488,7 @@ export function OnboardingFlow() {
           </ul>
           <div className="actions">
             <button type="button" onClick={loadMatches}>
-              Preview compatibility matches
+              See compatibility preview
             </button>
             <button type="button" onClick={startTrack}>
               Start 14-day decision track
@@ -456,16 +499,38 @@ export function OnboardingFlow() {
 
       {matches.length > 0 ? (
         <div className="panel">
-          <h3>Top Matches</h3>
+          <h3>Top compatibility previews</h3>
           {matches.map((match) => (
             <article key={match.candidateId} className="track-day">
               <strong>
                 {match.candidateFirstName} - {match.totalScore}/100
               </strong>
-              <p className="muted">
-                Intent {match.componentScores.intent}, Lifestyle {match.componentScores.lifestyle},
-                Conflict+Regulation {match.componentScores.conflictRegulation}
-              </p>
+              <p className="muted">Top fit signals:</p>
+              <ul className="list">
+                {match.topFitReasons.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+              <p className="muted">Potential friction points:</p>
+              <ul className="list">
+                {match.potentialFrictionPoints.map((reason) => (
+                  <li key={reason}>{reason}</li>
+                ))}
+              </ul>
+              <p className="muted">Suggested prompts:</p>
+              <ul className="list">
+                {match.conversationPrompts.map((prompt) => (
+                  <li key={prompt}>{prompt}</li>
+                ))}
+              </ul>
+              <div className="actions">
+                <button type="button" onClick={() => sendCalibration(5)}>
+                  Felt right
+                </button>
+                <button type="button" onClick={() => sendCalibration(2)}>
+                  Felt off
+                </button>
+              </div>
             </article>
           ))}
         </div>
@@ -478,6 +543,7 @@ export function OnboardingFlow() {
             State: {track.track.state} | Day: {track.track.day}
           </p>
           <p>{track.prompt}</p>
+          <p className="muted">{getNudge(track.track.state, track.track.day)}</p>
           <div className="actions">
             <button type="button" onClick={() => advanceTrack("complete_reflection")}>
               Complete reflection
@@ -486,6 +552,14 @@ export function OnboardingFlow() {
               Advance day
             </button>
           </div>
+          <details>
+            <summary>Respectful close-the-loop templates</summary>
+            <ul className="list">
+              <li>{getClosureTemplate("continue")}</li>
+              <li>{getClosureTemplate("pause")}</li>
+              <li>{getClosureTemplate("close")}</li>
+            </ul>
+          </details>
         </div>
       ) : null}
     </section>

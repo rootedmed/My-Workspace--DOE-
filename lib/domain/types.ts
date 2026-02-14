@@ -41,6 +41,9 @@ export type MatchResult = {
   totalScore: number;
   hardFilterPass: boolean;
   reasons: string[];
+  topFitReasons: string[];
+  potentialFrictionPoints: string[];
+  conversationPrompts: string[];
   componentScores: {
     intent: number;
     lifestyle: number;
@@ -69,4 +72,26 @@ export type DecisionTrack = {
   createdAt: string;
   updatedAt: string;
   previousState: Exclude<DecisionState, "not_started" | "completed" | "paused"> | null;
+};
+
+export type AccountUser = {
+  id: string;
+  email: string;
+  firstName: string;
+  passwordHash: string;
+  salt: string;
+  createdAt: string;
+};
+
+export type UserCalibration = {
+  userId: string;
+  weights: {
+    intent: number;
+    lifestyle: number;
+    attachment: number;
+    conflictRegulation: number;
+    personality: number;
+    novelty: number;
+  };
+  updatedAt: string;
 };

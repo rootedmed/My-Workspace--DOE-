@@ -11,10 +11,14 @@
     "test": "vitest run",
     "check": "npm run typecheck && npm run lint && npm run test",
     "test:watch": "vitest",
+    "seed:demo": "node scripts/seed-demo-users.mjs",
+    "seed:supabase": "node scripts/seed-supabase.mjs",
     "format": "prettier --check .",
     "format:write": "prettier --write ."
   },
   "dependencies": {
+    "@supabase/ssr": "^0.8.0",
+    "@supabase/supabase-js": "^2.95.3",
     "next": "16.1.6",
     "react": "19.0.0",
     "react-dom": "19.0.0",

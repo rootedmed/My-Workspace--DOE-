@@ -1,8 +1,12 @@
 import { NextResponse } from "next/server";
-import { db } from "@/lib/db/client";
 import { buildDecisionTrack, decisionTrackRequestSchema } from "@/lib/validation/decisionTrack";
+import { isValidCsrf } from "@/lib/security/csrf";
 
 export async function POST(request: Request) {
+  if (!isValidCsrf(request)) {
+    return NextResponse.json({ error: "CSRF token missing or invalid" }, { status: 403 });
+  }
+
   const body = await request.json().catch(() => null);
   const parsed = decisionTrackRequestSchema.safeParse(body);
 
@@ -17,8 +21,6 @@ export async function POST(request: Request) {
   }
 
   const track = buildDecisionTrack(parsed.data);
-  await db.incrementGeneratedTracks();
-
   return NextResponse.json(
     {
       profile: {

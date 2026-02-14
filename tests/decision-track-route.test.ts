@@ -1,4 +1,8 @@
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/security/csrf", () => ({
+  isValidCsrf: vi.fn(() => true)
+}));
 import { POST } from "@/app/api/decision-track/route";
 
 describe("POST /api/decision-track", () => {

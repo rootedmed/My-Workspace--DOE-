@@ -1,4 +1,5 @@
 import type { MatchResult, OnboardingProfile } from "@/lib/domain/types";
+import type { UserCalibration } from "@/lib/domain/types";
 
 function clamp(value: number): number {
   return Math.max(0, Math.min(100, Math.round(value)));
@@ -86,7 +87,49 @@ export function passesHardFilters(left: OnboardingProfile, right: OnboardingProf
   return { pass: reasons.length === 0, reasons };
 }
 
-export function scoreCompatibility(current: OnboardingProfile, candidate: OnboardingProfile): MatchResult {
+function buildExplainability(componentScores: MatchResult["componentScores"]): {
+  topFitReasons: string[];
+  potentialFrictionPoints: string[];
+  conversationPrompts: string[];
+} {
+  const pairs = Object.entries(componentScores).map(([name, score]) => ({ name, score }));
+  const sortedHigh = [...pairs].sort((a, b) => b.score - a.score);
+  const sortedLow = [...pairs].sort((a, b) => a.score - b.score);
+
+  const label: Record<string, string> = {
+    intent: "Shared commitment direction",
+    lifestyle: "Lifestyle feasibility",
+    attachment: "Attachment pace compatibility",
+    conflictRegulation: "Conflict and regulation alignment",
+    personality: "Personality fit",
+    novelty: "Novelty/stability rhythm"
+  };
+
+  const prompt: Record<string, string> = {
+    intent: "What pace feels respectful and realistic for both of us over 6-12 months?",
+    lifestyle: "What weekly rhythm can we realistically sustain?",
+    attachment: "How do we each ask for closeness or space when stressed?",
+    conflictRegulation: "What repair phrase should we agree to use after tension?",
+    personality: "Where do our defaults differ, and how can we support each other?",
+    novelty: "How much novelty versus routine helps each of us feel engaged?"
+  };
+
+  return {
+    topFitReasons: sortedHigh.slice(0, 3).map((entry) => `${label[entry.name]} (${entry.score}/100)`),
+    potentialFrictionPoints: sortedLow
+      .slice(0, 2)
+      .map((entry) => `${label[entry.name]} may need explicit conversation (${entry.score}/100)`),
+    conversationPrompts: sortedLow
+      .slice(0, 2)
+      .map((entry) => prompt[entry.name] ?? "Discuss expectations early and explicitly.")
+  };
+}
+
+export function scoreCompatibility(
+  current: OnboardingProfile,
+  candidate: OnboardingProfile,
+  calibration: UserCalibration | null = null
+): MatchResult {
   const hardFilter = passesHardFilters(current, candidate);
   const componentScores = {
     intent: intentScore(current, candidate),
@@ -97,13 +140,24 @@ export function scoreCompatibility(current: OnboardingProfile, candidate: Onboar
     novelty: noveltyScore(current, candidate)
   };
 
+  const weights = calibration?.weights ?? {
+    intent: 0.25,
+    lifestyle: 0.2,
+    attachment: 0.15,
+    conflictRegulation: 0.2,
+    personality: 0.15,
+    novelty: 0.05
+  };
+
   const weighted =
-    componentScores.intent * 0.25 +
-    componentScores.lifestyle * 0.2 +
-    componentScores.attachment * 0.15 +
-    componentScores.conflictRegulation * 0.2 +
-    componentScores.personality * 0.15 +
-    componentScores.novelty * 0.05;
+    componentScores.intent * weights.intent +
+    componentScores.lifestyle * weights.lifestyle +
+    componentScores.attachment * weights.attachment +
+    componentScores.conflictRegulation * weights.conflictRegulation +
+    componentScores.personality * weights.personality +
+    componentScores.novelty * weights.novelty;
+
+  const explainability = buildExplainability(componentScores);
 
   return {
     candidateId: candidate.id,
@@ -111,6 +165,9 @@ export function scoreCompatibility(current: OnboardingProfile, candidate: Onboar
     totalScore: hardFilter.pass ? clamp(weighted) : 0,
     hardFilterPass: hardFilter.pass,
     reasons: hardFilter.reasons,
+    topFitReasons: explainability.topFitReasons,
+    potentialFrictionPoints: explainability.potentialFrictionPoints,
+    conversationPrompts: explainability.conversationPrompts,
     componentScores
   };
 }

@@ -2,6 +2,13 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OnboardingFlow } from "@/components/OnboardingFlow";
 
+vi.mock("@/components/auth/csrf", () => ({
+  withCsrfHeaders: vi.fn(async (base: Record<string, string> = {}) => ({
+    ...base,
+    "x-csrf-token": "csrf-test-token"
+  }))
+}));
+
 afterEach(() => {
   vi.unstubAllGlobals();
 });
@@ -48,10 +55,9 @@ describe("OnboardingFlow", () => {
     );
     vi.stubGlobal("fetch", fetchMock);
 
-    render(<OnboardingFlow />);
+    render(<OnboardingFlow userId="user-1" />);
 
     fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Maya" } });
-    fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
     fireEvent.click(screen.getByRole("button", { name: "Save onboarding" }));

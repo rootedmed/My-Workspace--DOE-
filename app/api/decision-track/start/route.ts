@@ -1,24 +1,39 @@
+import { getCurrentUser } from "@/lib/auth/session";
 import { NextResponse } from "next/server";
-import { z } from "zod";
 import { db } from "@/lib/db/client";
-
-const startSchema = z.object({
-  userId: z.string().trim().min(1)
-});
+import { isValidCsrf } from "@/lib/security/csrf";
+import { assertWriteAllowed } from "@/lib/config/env.server";
+import { getRequestId, logStructured } from "@/lib/observability/logger";
 
 export async function POST(request: Request) {
-  const body = await request.json().catch(() => null);
-  const parsed = startSchema.safeParse(body);
+  const requestId = getRequestId(request);
 
-  if (!parsed.success) {
-    return NextResponse.json({ error: "Validation failed" }, { status: 400 });
+  try {
+    assertWriteAllowed();
+  } catch {
+    return NextResponse.json({ error: "Preview is read-only." }, { status: 503 });
   }
 
-  const profile = await db.getProfile(parsed.data.userId);
+  if (!isValidCsrf(request)) {
+    return NextResponse.json({ error: "CSRF token missing or invalid" }, { status: 403 });
+  }
+
+  const user = await getCurrentUser();
+  if (!user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+  logStructured("info", "api_user_context", {
+    request_id: requestId,
+    route: "/api/decision-track/start",
+    user_id: user.id
+  });
+  await request.json().catch(() => null);
+
+  const profile = await db.getProfile(user.id);
   if (!profile) {
     return NextResponse.json({ error: "Profile not found" }, { status: 404 });
   }
 
-  const result = await db.createDecisionTrack(parsed.data.userId);
+  const result = await db.createDecisionTrack(user.id);
   return NextResponse.json(result, { status: 200 });
 }
