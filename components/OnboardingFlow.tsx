@@ -509,6 +509,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
         <p className="eyebrow">Discover</p>
         <h1>Hey, {displayName}</h1>
         <p className="muted">Intent-first dating with calm, premium pacing.</p>
+        <div className="trust-chip">High-trust matching. No swipe mechanics.</div>
       </header>
 
       <AnimatePresence mode="wait" initial={false}>
@@ -518,7 +519,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           exit={{ opacity: 0, y: -10 }}
-          transition={{ duration: 0.2, ease: "easeOut" }}
+          transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
         >
           {tab === "discover" ? (
             <div className="stack">
@@ -564,10 +565,10 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
                     <motion.div
                       key={currentQuestion.id}
                       className="question-card"
-                      initial={{ opacity: 0, x: 20 }}
+                      initial={{ opacity: 0, x: 16 }}
                       animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -20 }}
-                      transition={{ duration: 0.2, ease: "easeOut" }}
+                      exit={{ opacity: 0, x: -16 }}
+                      transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                     >
                       <label className="question-label" htmlFor={currentQuestion.id}>
                         {currentQuestion.title}
@@ -755,6 +756,22 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
                 <p className="eyebrow">Profile</p>
                 <h2>{displayName}</h2>
                 <p className="muted">Intent: {toLabel(profile?.intent.lookingFor ?? values.lookingFor)}</p>
+                <div className="profile-meta">
+                  <span className="meta-pill">{toLabel(profile?.ageRange ?? values.ageRange)}</span>
+                  <span className="meta-pill">{toLabel(profile?.locationPreference ?? values.locationPreference)}</span>
+                </div>
+              </section>
+
+              <section className="panel">
+                <h3>Photo placeholders</h3>
+                <p className="muted">Visual slots for profile photos. Upload flow comes next phase.</p>
+                <div className="photo-grid" aria-label="Profile photo placeholders">
+                  {Array.from({ length: 6 }).map((_, index) => (
+                    <article key={`photo-${index}`} className="photo-slot">
+                      <span>Photo {index + 1}</span>
+                    </article>
+                  ))}
+                </div>
               </section>
 
               <section className="panel">
