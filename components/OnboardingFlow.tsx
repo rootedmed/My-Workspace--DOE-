@@ -502,6 +502,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
 
   const profile = saved?.profile;
   const displayName = (profile?.firstName ?? values.firstName.trim()) || (firstName ?? "You");
+  const currentValue = getFieldValue(values, currentQuestion.field);
 
   return (
     <section className="app-shell">
@@ -523,7 +524,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
         >
           {tab === "discover" ? (
             <div className="stack">
-              <section className="panel panel-tight">
+              <section className="panel panel-tight onboarding-top">
                 <div className="mode-picker" role="radiogroup" aria-label="Setup mode">
                   <button
                     type="button"
@@ -546,7 +547,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
               </section>
 
               <form onSubmit={submitOnboarding} className="stack">
-                <section className="panel onboarding-card">
+                <section className="panel onboarding-card elevated">
                   <div className="progress-wrap" aria-hidden="true">
                     <span className="progress-text">
                       Card {questionIndex + 1} of {questions.length}
@@ -564,12 +565,13 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
                   <AnimatePresence mode="wait" initial={false}>
                     <motion.div
                       key={currentQuestion.id}
-                      className="question-card"
+                      className="question-card stage-card"
                       initial={{ opacity: 0, x: 16 }}
                       animate={{ opacity: 1, x: 0 }}
                       exit={{ opacity: 0, x: -16 }}
                       transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
                     >
+                      <p className="eyebrow">Onboarding</p>
                       <label className="question-label" htmlFor={currentQuestion.id}>
                         {currentQuestion.title}
                       </label>
@@ -577,39 +579,53 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
                       {currentQuestion.kind === "text" ? (
                         <input
                           id={currentQuestion.id}
-                          value={getFieldValue(values, currentQuestion.field)}
+                          value={currentValue}
                           onChange={(event) =>
                             setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
                           }
                           autoComplete="given-name"
+                          placeholder="Enter your first name"
                         />
                       ) : null}
                       {currentQuestion.kind === "number" ? (
-                        <input
-                          id={currentQuestion.id}
-                          type="number"
-                          min={currentQuestion.min}
-                          max={currentQuestion.max}
-                          value={getFieldValue(values, currentQuestion.field)}
-                          onChange={(event) =>
-                            setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
-                          }
-                        />
+                        <div className="number-control">
+                          <input
+                            id={currentQuestion.id}
+                            className="range-input"
+                            type="range"
+                            min={currentQuestion.min}
+                            max={currentQuestion.max}
+                            value={currentValue}
+                            onChange={(event) =>
+                              setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
+                            }
+                          />
+                          <input
+                            aria-label={currentQuestion.title}
+                            type="number"
+                            min={currentQuestion.min}
+                            max={currentQuestion.max}
+                            value={currentValue}
+                            onChange={(event) =>
+                              setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
+                            }
+                          />
+                        </div>
                       ) : null}
                       {currentQuestion.kind === "select" ? (
-                        <select
-                          id={currentQuestion.id}
-                          value={getFieldValue(values, currentQuestion.field)}
-                          onChange={(event) =>
-                            setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
-                          }
-                        >
+                        <div className="option-grid" role="group" aria-label={currentQuestion.title}>
                           {currentQuestion.options?.map((option) => (
-                            <option key={option.value} value={option.value}>
+                            <button
+                              key={option.value}
+                              type="button"
+                              className={currentValue === option.value ? "answer-chip active" : "answer-chip"}
+                              onClick={() => setValues((prev) => setFieldValue(prev, currentQuestion.field, option.value))}
+                              aria-pressed={currentValue === option.value}
+                            >
                               {option.label}
-                            </option>
+                            </button>
                           ))}
-                        </select>
+                        </div>
                       ) : null}
 
                       {currentQuestion.field === "firstName" &&
@@ -752,7 +768,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
 
           {tab === "profile" ? (
             <div className="stack">
-              <section className="panel profile-hero">
+              <section className="panel profile-hero elevated">
                 <p className="eyebrow">Profile</p>
                 <h2>{displayName}</h2>
                 <p className="muted">Intent: {toLabel(profile?.intent.lookingFor ?? values.lookingFor)}</p>
@@ -842,6 +858,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
           className={tab === "discover" ? "nav-item active" : "nav-item"}
           onClick={() => setTab("discover")}
         >
+          <span className="nav-dot" aria-hidden="true" />
           <span>Discover</span>
         </button>
         <button
@@ -849,6 +866,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
           className={tab === "matches" ? "nav-item active" : "nav-item"}
           onClick={() => setTab("matches")}
         >
+          <span className="nav-dot" aria-hidden="true" />
           <span>Matches</span>
         </button>
         <button
@@ -856,6 +874,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
           className={tab === "profile" ? "nav-item active" : "nav-item"}
           onClick={() => setTab("profile")}
         >
+          <span className="nav-dot" aria-hidden="true" />
           <span>Profile</span>
         </button>
       </nav>
