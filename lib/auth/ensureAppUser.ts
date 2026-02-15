@@ -1,4 +1,6 @@
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { logStructured } from "@/lib/observability/logger";
+import { formatSupabaseError, pickSupabaseError } from "@/lib/observability/supabase";
 
 type AuthContextUser = {
   id: string;
@@ -20,6 +22,23 @@ export async function ensureAppUser(user: AuthContextUser): Promise<void> {
   );
 
   if (error) {
-    throw new Error("Could not sync app user profile");
+    const err = pickSupabaseError(error);
+    logStructured("error", "supabase_write", {
+      operation: "upsert",
+      table: "app_users",
+      user_id: user.id,
+      status: "error",
+      error_code: err?.code ?? null,
+      error_message: err?.message ?? null,
+      error_details: err?.details ?? null
+    });
+    throw new Error(`Could not sync app user profile: ${formatSupabaseError(error)}`);
   }
+
+  logStructured("info", "supabase_write", {
+    operation: "upsert",
+    table: "app_users",
+    user_id: user.id,
+    status: "ok"
+  });
 }

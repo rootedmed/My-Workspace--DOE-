@@ -16,6 +16,10 @@ vi.mock("@/lib/auth/supabaseAuth", () => ({
   getUserFromAccessToken: getUserFromAccessTokenMock
 }));
 
+vi.mock("@/lib/auth/ensureAppUser", () => ({
+  ensureAppUser: vi.fn(async () => undefined)
+}));
+
 vi.mock("@/lib/db/client", () => ({
   db: {
     upsertAuthUser: upsertAuthUserMock

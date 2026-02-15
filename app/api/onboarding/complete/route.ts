@@ -8,6 +8,7 @@ import { applyRateLimit, getRequestIp } from "@/lib/security/rateLimit";
 import { assertWriteAllowed } from "@/lib/config/env.server";
 import { getRequestId, logStructured } from "@/lib/observability/logger";
 import { ensureAppUser } from "@/lib/auth/ensureAppUser";
+import { pickSupabaseError } from "@/lib/observability/supabase";
 
 export async function POST(request: Request) {
   const requestId = getRequestId(request);
@@ -44,11 +45,15 @@ export async function POST(request: Request) {
     );
   }
 
-  await ensureAppUser({
-    id: user.id,
-    email: user.email,
-    firstName: user.firstName
-  }).catch(() => undefined);
+  try {
+    await ensureAppUser({
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName
+    });
+  } catch (error) {
+    return NextResponse.json({ error: "Could not initialize account row.", details: String(error) }, { status: 500 });
+  }
 
   const body = await request.json().catch(() => null);
   const parsed = onboardingSchema.safeParse(body);
@@ -63,19 +68,52 @@ export async function POST(request: Request) {
   const tendencies = scoreTendencies(parsed.data);
   const personality = scorePersonality(parsed.data);
 
-  const profile = await db.saveProfile(user.id, {
-    firstName: parsed.data.firstName,
-    ageRange: parsed.data.ageRange,
-    locationPreference: parsed.data.locationPreference,
-    intent: {
-      lookingFor: parsed.data.lookingFor,
-      timelineMonths: parsed.data.timelineMonths,
-      readiness: parsed.data.readiness,
-      weeklyCapacity: parsed.data.weeklyCapacity
-    },
-    tendencies,
-    personality
-  });
+  let profile;
+  try {
+    profile = await db.saveProfile(user.id, {
+      firstName: parsed.data.firstName,
+      ageRange: parsed.data.ageRange,
+      locationPreference: parsed.data.locationPreference,
+      intent: {
+        lookingFor: parsed.data.lookingFor,
+        timelineMonths: parsed.data.timelineMonths,
+        readiness: parsed.data.readiness,
+        weeklyCapacity: parsed.data.weeklyCapacity
+      },
+      tendencies,
+      personality
+    });
+    logStructured("info", "supabase_write", {
+      request_id: requestId,
+      operation: "upsert",
+      table: "onboarding_profiles",
+      user_id: user.id,
+      status: "ok"
+    });
+  } catch (error) {
+    const supabaseError = pickSupabaseError(error);
+    logStructured("error", "supabase_write", {
+      request_id: requestId,
+      operation: "upsert",
+      table: "onboarding_profiles",
+      user_id: user.id,
+      status: "error",
+      error_code: supabaseError?.code ?? null,
+      error_message: supabaseError?.message ?? (error instanceof Error ? error.message : "unknown"),
+      error_details: supabaseError?.details ?? null
+    });
+    return NextResponse.json(
+      {
+        error: "Could not persist onboarding profile.",
+        details: {
+          code: supabaseError?.code ?? null,
+          message: supabaseError?.message ?? (error instanceof Error ? error.message : "unknown"),
+          details: supabaseError?.details ?? null
+        }
+      },
+      { status: 500 }
+    );
+  }
 
   return NextResponse.json(
     {

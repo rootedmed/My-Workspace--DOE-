@@ -16,6 +16,10 @@ vi.mock("@/lib/auth/supabaseAuth", () => ({
   signInWithPassword: signInWithPasswordMock
 }));
 
+vi.mock("@/lib/auth/ensureAppUser", () => ({
+  ensureAppUser: vi.fn(async () => undefined)
+}));
+
 vi.mock("@/lib/security/csrf", () => ({
   isValidCsrf: vi.fn(() => true)
 }));

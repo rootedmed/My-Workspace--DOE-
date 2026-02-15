@@ -1,11 +1,15 @@
+import crypto from "node:crypto";
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { isValidCsrf } from "@/lib/security/csrf";
 import { assertWriteAllowed } from "@/lib/config/env.server";
 import { ensureAppUser } from "@/lib/auth/ensureAppUser";
+import { getRequestId, logStructured } from "@/lib/observability/logger";
+import { pickSupabaseError } from "@/lib/observability/supabase";
 
 const MAX_FILE_SIZE = 5 * 1024 * 1024;
+const PHOTO_BUCKET = "profile-photos";
 
 function parseSlot(raw: FormDataEntryValue | null): number {
   const slot = Number(raw);
@@ -15,7 +19,31 @@ function parseSlot(raw: FormDataEntryValue | null): number {
   return slot;
 }
 
-export async function GET() {
+function isFileLike(value: FormDataEntryValue | null): value is File {
+  return (
+    typeof value === "object" &&
+    value !== null &&
+    "size" in value &&
+    "type" in value &&
+    "arrayBuffer" in value
+  );
+}
+
+function extensionForType(mimeType: string): string {
+  const lookup: Record<string, string> = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+    "image/heic": "heic",
+    "image/heif": "heif"
+  };
+
+  return lookup[mimeType] ?? "bin";
+}
+
+export async function GET(request: Request) {
+  const requestId = getRequestId(request);
   const user = await getCurrentUser();
   if (!user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
@@ -24,27 +52,75 @@ export async function GET() {
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from("user_photos")
-    .select("id, slot, mime_type, image_base64, created_at, updated_at")
+    .select("id, slot, mime_type, storage_path, created_at, updated_at")
     .eq("user_id", user.id)
     .order("slot", { ascending: true });
 
   if (error) {
-    return NextResponse.json({ error: "Could not load photos." }, { status: 500 });
+    const err = pickSupabaseError(error);
+    logStructured("error", "supabase_write", {
+      request_id: requestId,
+      operation: "select",
+      table: "user_photos",
+      user_id: user.id,
+      status: "error",
+      error_code: err?.code ?? null,
+      error_message: err?.message ?? null,
+      error_details: err?.details ?? null
+    });
+    return NextResponse.json(
+      {
+        error: "Could not load photos.",
+        details: {
+          code: err?.code ?? null,
+          message: err?.message ?? null,
+          details: err?.details ?? null
+        }
+      },
+      { status: 500 }
+    );
   }
 
-  const photos = (data ?? []).map((row) => ({
-    id: String(row.id),
-    slot: Number(row.slot),
-    mimeType: String(row.mime_type),
-    dataUrl: `data:${String(row.mime_type)};base64,${String(row.image_base64)}`,
-    createdAt: String(row.created_at),
-    updatedAt: String(row.updated_at)
-  }));
+  const rows = data ?? [];
+  const signed = await Promise.all(
+    rows.map(async (row) => {
+      const path = String(row.storage_path);
+      const signedResult = await supabase.storage.from(PHOTO_BUCKET).createSignedUrl(path, 60 * 60);
 
-  return NextResponse.json({ photos }, { status: 200 });
+      if (signedResult.error || !signedResult.data?.signedUrl) {
+        const err = pickSupabaseError(signedResult.error);
+        logStructured("error", "supabase_storage", {
+          request_id: requestId,
+          operation: "signed_url",
+          bucket: PHOTO_BUCKET,
+          user_id: user.id,
+          object_path: path,
+          status: "error",
+          error_code: err?.code ?? null,
+          error_message: err?.message ?? null,
+          error_details: err?.details ?? null
+        });
+        return null;
+      }
+
+      return {
+        id: String(row.id),
+        slot: Number(row.slot),
+        mimeType: String(row.mime_type),
+        storagePath: path,
+        url: signedResult.data.signedUrl,
+        createdAt: String(row.created_at),
+        updatedAt: String(row.updated_at)
+      };
+    })
+  );
+
+  return NextResponse.json({ photos: signed.filter(Boolean) }, { status: 200 });
 }
 
 export async function POST(request: Request) {
+  const requestId = getRequestId(request);
+
   try {
     assertWriteAllowed();
   } catch {
@@ -60,11 +136,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
-  await ensureAppUser({
-    id: user.id,
-    email: user.email,
-    firstName: user.firstName
-  }).catch(() => undefined);
+  try {
+    await ensureAppUser({
+      id: user.id,
+      email: user.email,
+      firstName: user.firstName
+    });
+  } catch (error) {
+    return NextResponse.json({ error: "Could not initialize account row.", details: String(error) }, { status: 500 });
+  }
 
   const form = await request.formData().catch(() => null);
   if (!form) {
@@ -72,7 +152,7 @@ export async function POST(request: Request) {
   }
 
   const file = form.get("file");
-  if (!(file instanceof File)) {
+  if (!isFileLike(file)) {
     return NextResponse.json({ error: "Photo file is required." }, { status: 400 });
   }
 
@@ -85,38 +165,179 @@ export async function POST(request: Request) {
   }
 
   const slot = parseSlot(form.get("slot"));
-  const bytes = Buffer.from(await file.arrayBuffer());
-  const imageBase64 = bytes.toString("base64");
+  const ext = extensionForType(file.type);
+  const storagePath = `${user.id}/${crypto.randomUUID()}.${ext}`;
 
   const supabase = await createServerSupabaseClient();
-  const { data, error } = await supabase
+  const existing = await supabase
+    .from("user_photos")
+    .select("id, storage_path")
+    .eq("user_id", user.id)
+    .eq("slot", slot)
+    .maybeSingle();
+
+  if (existing.error) {
+    const err = pickSupabaseError(existing.error);
+    logStructured("error", "supabase_write", {
+      request_id: requestId,
+      operation: "select",
+      table: "user_photos",
+      user_id: user.id,
+      status: "error",
+      error_code: err?.code ?? null,
+      error_message: err?.message ?? null,
+      error_details: err?.details ?? null
+    });
+    return NextResponse.json(
+      {
+        error: "Could not read existing photo slot.",
+        details: {
+          code: err?.code ?? null,
+          message: err?.message ?? null,
+          details: err?.details ?? null
+        }
+      },
+      { status: 500 }
+    );
+  }
+
+  const uploadResult = await supabase.storage.from(PHOTO_BUCKET).upload(storagePath, file, {
+    contentType: file.type,
+    upsert: false
+  });
+
+  if (uploadResult.error) {
+    const err = pickSupabaseError(uploadResult.error);
+    logStructured("error", "supabase_storage", {
+      request_id: requestId,
+      operation: "upload",
+      bucket: PHOTO_BUCKET,
+      user_id: user.id,
+      object_path: storagePath,
+      status: "error",
+      error_code: err?.code ?? null,
+      error_message: err?.message ?? null,
+      error_details: err?.details ?? null
+    });
+    return NextResponse.json(
+      {
+        error: "Could not upload photo to storage.",
+        details: {
+          code: err?.code ?? null,
+          message: err?.message ?? null,
+          details: err?.details ?? null
+        }
+      },
+      { status: 500 }
+    );
+  }
+
+  logStructured("info", "supabase_storage", {
+    request_id: requestId,
+    operation: "upload",
+    bucket: PHOTO_BUCKET,
+    user_id: user.id,
+    object_path: storagePath,
+    status: "ok"
+  });
+
+  const upsertResult = await supabase
     .from("user_photos")
     .upsert(
       {
         user_id: user.id,
         slot,
         mime_type: file.type,
-        image_base64: imageBase64,
+        storage_path: storagePath,
         updated_at: new Date().toISOString()
       },
       { onConflict: "user_id,slot" }
     )
-    .select("id, slot, mime_type, image_base64, created_at, updated_at")
+    .select("id, slot, mime_type, storage_path, created_at, updated_at")
     .single();
 
-  if (error || !data) {
-    return NextResponse.json({ error: "Could not store photo." }, { status: 500 });
+  if (upsertResult.error || !upsertResult.data) {
+    const err = pickSupabaseError(upsertResult.error);
+    logStructured("error", "supabase_write", {
+      request_id: requestId,
+      operation: "upsert",
+      table: "user_photos",
+      user_id: user.id,
+      status: "error",
+      error_code: err?.code ?? null,
+      error_message: err?.message ?? null,
+      error_details: err?.details ?? null
+    });
+    return NextResponse.json(
+      {
+        error: "Could not store photo metadata.",
+        details: {
+          code: err?.code ?? null,
+          message: err?.message ?? null,
+          details: err?.details ?? null
+        }
+      },
+      { status: 500 }
+    );
+  }
+
+  logStructured("info", "supabase_write", {
+    request_id: requestId,
+    operation: "upsert",
+    table: "user_photos",
+    user_id: user.id,
+    status: "ok"
+  });
+
+  const oldPath = existing.data?.storage_path ? String(existing.data.storage_path) : null;
+  if (oldPath && oldPath !== storagePath) {
+    const removeResult = await supabase.storage.from(PHOTO_BUCKET).remove([oldPath]);
+    if (removeResult.error) {
+      const err = pickSupabaseError(removeResult.error);
+      logStructured("warn", "supabase_storage", {
+        request_id: requestId,
+        operation: "remove",
+        bucket: PHOTO_BUCKET,
+        user_id: user.id,
+        object_path: oldPath,
+        status: "error",
+        error_code: err?.code ?? null,
+        error_message: err?.message ?? null,
+        error_details: err?.details ?? null
+      });
+    }
+  }
+
+  const signedResult = await supabase
+    .storage
+    .from(PHOTO_BUCKET)
+    .createSignedUrl(String(upsertResult.data.storage_path), 60 * 60);
+
+  if (signedResult.error || !signedResult.data?.signedUrl) {
+    const err = pickSupabaseError(signedResult.error);
+    return NextResponse.json(
+      {
+        error: "Photo saved but URL signing failed.",
+        details: {
+          code: err?.code ?? null,
+          message: err?.message ?? null,
+          details: err?.details ?? null
+        }
+      },
+      { status: 500 }
+    );
   }
 
   return NextResponse.json(
     {
       photo: {
-        id: String(data.id),
-        slot: Number(data.slot),
-        mimeType: String(data.mime_type),
-        dataUrl: `data:${String(data.mime_type)};base64,${String(data.image_base64)}`,
-        createdAt: String(data.created_at),
-        updatedAt: String(data.updated_at)
+        id: String(upsertResult.data.id),
+        slot: Number(upsertResult.data.slot),
+        mimeType: String(upsertResult.data.mime_type),
+        storagePath: String(upsertResult.data.storage_path),
+        url: signedResult.data.signedUrl,
+        createdAt: String(upsertResult.data.created_at),
+        updatedAt: String(upsertResult.data.updated_at)
       }
     },
     { status: 200 }

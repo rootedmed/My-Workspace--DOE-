@@ -21,6 +21,10 @@ vi.mock("@/lib/auth/session", () => ({
   getCurrentUser: getCurrentUserMock
 }));
 
+vi.mock("@/lib/auth/ensureAppUser", () => ({
+  ensureAppUser: vi.fn(async () => undefined)
+}));
+
 import { POST as loginPost } from "@/app/api/auth/login/route";
 import { POST as onboardingPost } from "@/app/api/onboarding/complete/route";
 

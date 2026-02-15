@@ -8,6 +8,7 @@ import { seedProfiles } from "@/lib/db/seedProfiles";
 import type { AppStats, AuthUserInput, DatabaseClient, NewUserInput, SaveProfileInput } from "@/lib/db/types";
 import { validateServerEnv } from "@/lib/config/env.server";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { formatSupabaseError } from "@/lib/observability/supabase";
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -323,7 +324,7 @@ class SupabaseRlsClient implements DatabaseClient {
       .single();
 
     if (error || !data) {
-      throw new Error("Supabase request failed");
+      throw new Error(`Supabase onboarding write failed: ${formatSupabaseError(error)}`);
     }
 
     return this.userFromRow(data as Record<string, unknown>);

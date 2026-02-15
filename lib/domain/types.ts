@@ -100,7 +100,8 @@ export type UserPhoto = {
   id: string;
   slot: number;
   mimeType: string;
-  dataUrl: string;
+  storagePath: string;
+  url: string;
   createdAt: string;
   updatedAt: string;
 };

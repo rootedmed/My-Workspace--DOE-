@@ -511,7 +511,10 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
 
       if (!response.ok) {
         const payload = (await response.json().catch(() => null)) as
-          | { error?: string; details?: { fieldErrors?: Record<string, string[]> } }
+          | {
+              error?: string;
+              details?: { fieldErrors?: Record<string, string[]>; message?: string | null; code?: string | null };
+            }
           | null;
         const detail = payload?.details?.fieldErrors
           ? Object.entries(payload.details.fieldErrors)
@@ -520,7 +523,12 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
               .map(([field, msgs]) => `${field}: ${msgs?.[0]}`)
               .join(", ")
           : "";
-        setError(detail ? `Could not save onboarding. ${detail}` : payload?.error ?? "Could not save onboarding.");
+        const detailMessage = payload?.details?.message ? ` ${payload.details.message}` : "";
+        setError(
+          detail
+            ? `Could not save onboarding. ${detail}`
+            : `${payload?.error ?? "Could not save onboarding."}${detailMessage}`
+        );
         return;
       }
 
@@ -915,7 +923,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
                     <article key={`photo-${index}`} className="photo-slot">
                       {slotPhoto ? (
                         <Image
-                          src={slotPhoto.dataUrl}
+                          src={slotPhoto.url}
                           alt={`Profile photo slot ${slot}`}
                           className="photo-preview"
                           width={400}

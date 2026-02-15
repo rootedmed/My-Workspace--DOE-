@@ -1,11 +1,19 @@
 import { describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth/session", () => ({
-  getCurrentUser: vi.fn(async () => ({ id: "user-1" }))
+  getCurrentUser: vi.fn(async () => ({
+    id: "user-1",
+    email: "maya@example.com",
+    firstName: "Maya"
+  }))
 }));
 
 vi.mock("@/lib/security/csrf", () => ({
   isValidCsrf: vi.fn(() => true)
+}));
+
+vi.mock("@/lib/auth/ensureAppUser", () => ({
+  ensureAppUser: vi.fn(async () => undefined)
 }));
 
 import { POST } from "@/app/api/onboarding/complete/route";
