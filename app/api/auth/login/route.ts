@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { signInWithPassword } from "@/lib/auth/supabaseAuth";
-import { db } from "@/lib/db/client";
 import { isValidCsrf } from "@/lib/security/csrf";
 import { applyRateLimit, getRequestIp } from "@/lib/security/rateLimit";
 import { getRequestId, logStructured } from "@/lib/observability/logger";
+import { ensureAppUser } from "@/lib/auth/ensureAppUser";
 
 const loginSchema = z.object({
   email: z.string().trim().email(),
@@ -50,13 +50,11 @@ export async function POST(request: Request) {
     signedIn.user.email.split("@")[0] ??
     "Member";
 
-  await db
-    .upsertAuthUser({
-      id: signedIn.user.id,
-      email: signedIn.user.email,
-      firstName
-    })
-    .catch(() => null);
+  await ensureAppUser({
+    id: signedIn.user.id,
+    email: signedIn.user.email,
+    firstName
+  }).catch(() => undefined);
 
   logStructured("info", "api_user_context", {
     request_id: requestId,

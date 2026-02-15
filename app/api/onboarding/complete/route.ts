@@ -7,6 +7,7 @@ import { isValidCsrf } from "@/lib/security/csrf";
 import { applyRateLimit, getRequestIp } from "@/lib/security/rateLimit";
 import { assertWriteAllowed } from "@/lib/config/env.server";
 import { getRequestId, logStructured } from "@/lib/observability/logger";
+import { ensureAppUser } from "@/lib/auth/ensureAppUser";
 
 export async function POST(request: Request) {
   const requestId = getRequestId(request);
@@ -43,16 +44,11 @@ export async function POST(request: Request) {
     );
   }
 
-  const upserted = await db
-    .upsertAuthUser({
-      id: user.id,
-      email: user.email ?? `${user.id}@local.invalid`,
-      firstName: user.firstName ?? "Member"
-    })
-    .catch(() => null);
-  if (!upserted) {
-    return NextResponse.json({ error: "Could not initialize your account profile." }, { status: 500 });
-  }
+  await ensureAppUser({
+    id: user.id,
+    email: user.email,
+    firstName: user.firstName
+  }).catch(() => undefined);
 
   const body = await request.json().catch(() => null);
   const parsed = onboardingSchema.safeParse(body);

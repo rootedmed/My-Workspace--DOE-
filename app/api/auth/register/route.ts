@@ -1,11 +1,11 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isValidCsrf } from "@/lib/security/csrf";
-import { db } from "@/lib/db/client";
 import { applyRateLimit, getRequestIp } from "@/lib/security/rateLimit";
 import { assertWriteAllowed } from "@/lib/config/env.server";
 import { getRequestId, logStructured } from "@/lib/observability/logger";
 import { signUpWithPassword } from "@/lib/auth/supabaseAuth";
+import { ensureAppUser } from "@/lib/auth/ensureAppUser";
 
 const registerSchema = z.object({
   firstName: z.string().trim().min(2).max(40),
@@ -61,13 +61,11 @@ export async function POST(request: Request) {
       );
     }
 
-    await db
-      .upsertAuthUser({
-        id: signUp.user.id,
-        email: signUp.user.email,
-        firstName: parsed.data.firstName
-      })
-      .catch(() => null);
+    await ensureAppUser({
+      id: signUp.user.id,
+      email: signUp.user.email,
+      firstName: parsed.data.firstName
+    }).catch(() => undefined);
 
     logStructured("info", "api_user_context", {
       request_id: requestId,
