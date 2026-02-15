@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { isValidCsrf } from "@/lib/security/csrf";
+import { db } from "@/lib/db/client";
 import { applyRateLimit, getRequestIp } from "@/lib/security/rateLimit";
 import { assertWriteAllowed } from "@/lib/config/env.server";
 import { getRequestId, logStructured } from "@/lib/observability/logger";
@@ -59,6 +60,14 @@ export async function POST(request: Request) {
         { status: 200 }
       );
     }
+
+    await db
+      .upsertAuthUser({
+        id: signUp.user.id,
+        email: signUp.user.email,
+        firstName: parsed.data.firstName
+      })
+      .catch(() => null);
 
     logStructured("info", "api_user_context", {
       request_id: requestId,

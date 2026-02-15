@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
+import { db } from "@/lib/db/client";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { isValidCsrf } from "@/lib/security/csrf";
 import { assertWriteAllowed } from "@/lib/config/env.server";
@@ -57,6 +58,17 @@ export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const upserted = await db
+    .upsertAuthUser({
+      id: user.id,
+      email: user.email ?? `${user.id}@local.invalid`,
+      firstName: user.firstName ?? "Member"
+    })
+    .catch(() => null);
+  if (!upserted) {
+    return NextResponse.json({ error: "Could not initialize your account profile." }, { status: 500 });
   }
 
   const form = await request.formData().catch(() => null);

@@ -43,6 +43,17 @@ export async function POST(request: Request) {
     );
   }
 
+  const upserted = await db
+    .upsertAuthUser({
+      id: user.id,
+      email: user.email ?? `${user.id}@local.invalid`,
+      firstName: user.firstName ?? "Member"
+    })
+    .catch(() => null);
+  if (!upserted) {
+    return NextResponse.json({ error: "Could not initialize your account profile." }, { status: 500 });
+  }
+
   const body = await request.json().catch(() => null);
   const parsed = onboardingSchema.safeParse(body);
 

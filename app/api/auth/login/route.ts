@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { signInWithPassword } from "@/lib/auth/supabaseAuth";
+import { db } from "@/lib/db/client";
 import { isValidCsrf } from "@/lib/security/csrf";
 import { applyRateLimit, getRequestIp } from "@/lib/security/rateLimit";
 import { getRequestId, logStructured } from "@/lib/observability/logger";
@@ -48,6 +49,15 @@ export async function POST(request: Request) {
     signedIn.user.user_metadata?.first_name ??
     signedIn.user.email.split("@")[0] ??
     "Member";
+
+  await db
+    .upsertAuthUser({
+      id: signedIn.user.id,
+      email: signedIn.user.email,
+      firstName
+    })
+    .catch(() => null);
+
   logStructured("info", "api_user_context", {
     request_id: requestId,
     route: "/api/auth/login",
