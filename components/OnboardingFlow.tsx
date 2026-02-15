@@ -2,7 +2,8 @@
 
 import { FormEvent, useEffect, useMemo, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { DecisionTrack, MatchResult, OnboardingProfile } from "@/lib/domain/types";
+import Image from "next/image";
+import type { DecisionTrack, MatchResult, OnboardingProfile, UserPhoto } from "@/lib/domain/types";
 import { getClosureTemplate, getNudge } from "@/lib/decision-track/stateMachine";
 import { withCsrfHeaders } from "@/components/auth/csrf";
 
@@ -44,6 +45,10 @@ type MatchResponse = {
 type DecisionTrackResponse = {
   track: DecisionTrack;
   prompt: string;
+};
+
+type PhotosResponse = {
+  photos: UserPhoto[];
 };
 
 type QuestionOption = {
@@ -337,6 +342,40 @@ function scoreLabel(score: number): string {
   return "Developing";
 }
 
+function likertFromScore(score: number): string {
+  const mapped = Math.round(score / 20);
+  return String(Math.min(5, Math.max(1, mapped || 3)));
+}
+
+function valuesFromProfile(profile: OnboardingProfile): WizardValues {
+  const anxiety = likertFromScore(profile.tendencies.attachmentAnxiety);
+  const avoidance = likertFromScore(profile.tendencies.attachmentAvoidance);
+  const repair = likertFromScore(profile.tendencies.conflictRepair);
+  const regulation = likertFromScore(profile.tendencies.emotionalRegulation);
+
+  return {
+    firstName: profile.firstName,
+    ageRange: profile.ageRange,
+    locationPreference: profile.locationPreference,
+    lookingFor: profile.intent.lookingFor,
+    timelineMonths: String(profile.intent.timelineMonths),
+    readiness: String(profile.intent.readiness),
+    weeklyCapacity: String(profile.intent.weeklyCapacity),
+    attachmentAnxiety: [anxiety, anxiety, anxiety],
+    attachmentAvoidance: [avoidance, avoidance, avoidance],
+    startupSoftness: repair,
+    repairAfterConflict: repair,
+    calmUnderStress: regulation,
+    pauseBeforeReacting: regulation,
+    openness: likertFromScore(profile.personality.openness),
+    conscientiousness: likertFromScore(profile.personality.conscientiousness),
+    extraversion: likertFromScore(profile.personality.extraversion),
+    agreeableness: likertFromScore(profile.personality.agreeableness),
+    emotionalStability: likertFromScore(profile.personality.emotionalStability),
+    noveltyPreference: likertFromScore(profile.tendencies.noveltyPreference)
+  };
+}
+
 export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
   const [tab, setTab] = useState<AppTab>("discover");
   const [mode, setMode] = useState<WizardMode>("fast");
@@ -348,6 +387,9 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
   const [matches, setMatches] = useState<MatchResult[]>([]);
   const [track, setTrack] = useState<DecisionTrackResponse | null>(null);
   const [savedBanner, setSavedBanner] = useState<string | null>(null);
+  const [photos, setPhotos] = useState<UserPhoto[]>([]);
+  const [uploadingSlot, setUploadingSlot] = useState<number | null>(null);
+  const [photoError, setPhotoError] = useState<string | null>(null);
 
   const questions = useMemo(() => {
     if (mode === "fast") {
@@ -362,6 +404,46 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
   useEffect(() => {
     setQuestionIndex((prev) => Math.min(prev, questions.length - 1));
   }, [questions.length]);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadSavedOnboarding() {
+      const response = await fetch("/api/onboarding/profile", { cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+      const data = (await response.json()) as OnboardingResponse & { profile: OnboardingProfile | null };
+      if (!data.profile || cancelled) {
+        return;
+      }
+      setSaved({ profile: data.profile, tendenciesSummary: data.tendenciesSummary ?? [] });
+      setValues(valuesFromProfile(data.profile));
+    }
+
+    void loadSavedOnboarding();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+
+    async function loadPhotos() {
+      const response = await fetch("/api/photos", { cache: "no-store" });
+      if (!response.ok || cancelled) {
+        return;
+      }
+      const data = (await response.json()) as PhotosResponse;
+      setPhotos(data.photos ?? []);
+    }
+
+    void loadPhotos();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const canContinue = useMemo(() => {
     const value = getFieldValue(values, currentQuestion.field).trim();
@@ -428,7 +510,17 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
       });
 
       if (!response.ok) {
-        setError("Could not save onboarding. Please review your entries.");
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string; details?: { fieldErrors?: Record<string, string[]> } }
+          | null;
+        const detail = payload?.details?.fieldErrors
+          ? Object.entries(payload.details.fieldErrors)
+              .filter(([, msgs]) => (msgs ?? []).length > 0)
+              .slice(0, 1)
+              .map(([field, msgs]) => `${field}: ${msgs?.[0]}`)
+              .join(", ")
+          : "";
+        setError(detail ? `Could not save onboarding. ${detail}` : payload?.error ?? "Could not save onboarding.");
         return;
       }
 
@@ -498,6 +590,39 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
   async function signOut() {
     await fetch("/api/auth/logout", { method: "POST", headers: await withCsrfHeaders() });
     window.location.href = "/login";
+  }
+
+  async function uploadPhoto(slot: number, file: File) {
+    setPhotoError(null);
+    setUploadingSlot(slot);
+
+    const formData = new FormData();
+    formData.append("slot", String(slot));
+    formData.append("file", file);
+
+    try {
+      const response = await fetch("/api/photos", {
+        method: "POST",
+        headers: await withCsrfHeaders(),
+        body: formData
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        setPhotoError(payload?.error ?? "Could not upload photo.");
+        return;
+      }
+
+      const payload = (await response.json()) as { photo: UserPhoto };
+      setPhotos((prev) => {
+        const without = prev.filter((photo) => photo.slot !== payload.photo.slot);
+        return [...without, payload.photo].sort((a, b) => a.slot - b.slot);
+      });
+    } catch {
+      setPhotoError("Upload failed. Please try again.");
+    } finally {
+      setUploadingSlot(null);
+    }
   }
 
   const profile = saved?.profile;
@@ -780,14 +905,47 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
 
               <section className="panel">
                 <h3>Photo placeholders</h3>
-                <p className="muted">Visual slots for profile photos. Upload flow comes next phase.</p>
+                <p className="muted">Upload up to 6 photos. Each photo replaces its slot.</p>
                 <div className="photo-grid" aria-label="Profile photo placeholders">
-                  {Array.from({ length: 6 }).map((_, index) => (
+                  {Array.from({ length: 6 }).map((_, index) => {
+                    const slot = index + 1;
+                    const slotPhoto = photos.find((photo) => photo.slot === slot);
+
+                    return (
                     <article key={`photo-${index}`} className="photo-slot">
-                      <span>Photo {index + 1}</span>
+                      {slotPhoto ? (
+                        <Image
+                          src={slotPhoto.dataUrl}
+                          alt={`Profile photo slot ${slot}`}
+                          className="photo-preview"
+                          width={400}
+                          height={520}
+                          unoptimized
+                        />
+                      ) : (
+                        <span>Photo {slot}</span>
+                      )}
+                      <label className="upload-button">
+                        {uploadingSlot === slot ? "Uploading..." : slotPhoto ? "Replace" : "Upload"}
+                        <input
+                          type="file"
+                          accept="image/*"
+                          disabled={uploadingSlot === slot}
+                          onChange={(event) => {
+                            const file = event.target.files?.[0];
+                            if (!file) {
+                              return;
+                            }
+                            void uploadPhoto(slot, file);
+                            event.currentTarget.value = "";
+                          }}
+                        />
+                      </label>
                     </article>
-                  ))}
+                    );
+                  })}
                 </div>
+                {photoError ? <p className="inline-error">{photoError}</p> : null}
               </section>
 
               <section className="panel">

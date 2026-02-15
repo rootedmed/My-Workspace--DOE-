@@ -95,3 +95,12 @@ export type UserCalibration = {
   };
   updatedAt: string;
 };
+
+export type UserPhoto = {
+  id: string;
+  slot: number;
+  mimeType: string;
+  dataUrl: string;
+  createdAt: string;
+  updatedAt: string;
+};

@@ -15,8 +15,16 @@ afterEach(() => {
 
 describe("OnboardingFlow", () => {
   it("submits onboarding payload to save endpoint", async () => {
-    const fetchMock = vi.fn().mockResolvedValue(
-      new Response(
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const url = typeof input === "string" ? input : String(input);
+      if (url === "/api/photos" && !init?.method) {
+        return new Response(JSON.stringify({ photos: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      return new Response(
         JSON.stringify({
           profile: {
             id: "user-1",
@@ -51,8 +59,8 @@ describe("OnboardingFlow", () => {
           status: 200,
           headers: { "Content-Type": "application/json" }
         }
-      )
-    );
+      );
+    });
     vi.stubGlobal("fetch", fetchMock);
 
     render(<OnboardingFlow userId="user-1" />);
