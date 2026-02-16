@@ -4,6 +4,9 @@ import { useEffect, useState } from "react";
 
 type DebugPayload = {
   projectRef: string | null;
+  anonKeyProjectRef: string | null;
+  anonKeyLooksValid: boolean;
+  anonKeyMatchesUrl: boolean | null;
   runtime: string;
   nodeEnv: string;
   env: Record<string, boolean>;
@@ -46,6 +49,9 @@ export default function DebugPage() {
         {data ? (
           <>
             <p><strong>Project ref:</strong> {data.projectRef ?? "Unavailable"}</p>
+            <p><strong>Anon key ref:</strong> {data.anonKeyProjectRef ?? "Unavailable"}</p>
+            <p><strong>Anon key valid:</strong> {String(data.anonKeyLooksValid)}</p>
+            <p><strong>Anon key matches URL ref:</strong> {String(data.anonKeyMatchesUrl)}</p>
             <p><strong>Runtime:</strong> {data.runtime}</p>
             <p><strong>Node env:</strong> {data.nodeEnv}</p>
             <pre>{JSON.stringify(data.env, null, 2)}</pre>
