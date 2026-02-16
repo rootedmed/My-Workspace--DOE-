@@ -17,8 +17,55 @@ describe("OnboardingFlow", () => {
   it("submits onboarding payload to save endpoint", async () => {
     const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
       const url = typeof input === "string" ? input : String(input);
+      if (url === "/api/onboarding/progress" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            progress: { current_step: 1, completed: false, total_steps: 3, mode: "fast" },
+            draft: {}
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
+
+      if (url === "/api/onboarding/profile" && !init?.method) {
+        return new Response(
+          JSON.stringify({
+            profile: null,
+            tendenciesSummary: []
+          }),
+          {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          }
+        );
+      }
+
       if (url === "/api/photos" && !init?.method) {
         return new Response(JSON.stringify({ photos: [] }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      if (url === "/api/discover" && !init?.method) {
+        return new Response(JSON.stringify({ candidates: [], emptyReason: "No candidates yet." }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      if (url === "/api/onboarding/answer" && init?.method === "POST") {
+        return new Response(JSON.stringify({ ok: true }), {
+          status: 200,
+          headers: { "Content-Type": "application/json" }
+        });
+      }
+
+      if (url === "/api/matches/preview" && !init?.method) {
+        return new Response(JSON.stringify({ userId: "user-1", matches: [] }), {
           status: 200,
           headers: { "Content-Type": "application/json" }
         });
@@ -65,9 +112,17 @@ describe("OnboardingFlow", () => {
 
     render(<OnboardingFlow userId="user-1" />);
 
+    await waitFor(() => expect(screen.queryByText("Loading profile...")).not.toBeInTheDocument());
+
     fireEvent.change(screen.getByLabelText("First name"), { target: { value: "Maya" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: "Continue" })).not.toBeDisabled());
+
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByLabelText("What are you looking for?")).toBeInTheDocument());
+
     fireEvent.click(screen.getByRole("button", { name: "Continue" }));
+    await waitFor(() => expect(screen.getByLabelText(/Preferred commitment timeline \(months\)/i)).toBeInTheDocument());
+
     fireEvent.click(screen.getByRole("button", { name: "Save onboarding" }));
 
     await waitFor(() => {

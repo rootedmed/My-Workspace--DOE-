@@ -1,14 +1,13 @@
 "use client";
 
-import { FormEvent, useEffect, useMemo, useState } from "react";
-import { AnimatePresence, motion } from "framer-motion";
 import Image from "next/image";
-import type { DecisionTrack, MatchResult, OnboardingProfile, UserPhoto } from "@/lib/domain/types";
-import { getClosureTemplate, getNudge } from "@/lib/decision-track/stateMachine";
+import { useCallback, useEffect, useMemo, useState } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import type { MatchResult, OnboardingProfile, UserPhoto } from "@/lib/domain/types";
 import { withCsrfHeaders } from "@/components/auth/csrf";
 
 type WizardMode = "fast" | "deep";
-type AppTab = "discover" | "matches" | "profile";
+type AppTab = "home" | "discover" | "matches" | "me";
 
 type WizardValues = {
   firstName: string;
@@ -40,15 +39,52 @@ type OnboardingResponse = {
 type MatchResponse = {
   userId: string;
   matches: MatchResult[];
-};
-
-type DecisionTrackResponse = {
-  track: DecisionTrack;
-  prompt: string;
+  emptyReason?: string | null;
 };
 
 type PhotosResponse = {
   photos: UserPhoto[];
+};
+
+type DiscoverCandidate = {
+  id: string;
+  firstName: string;
+  ageRange: string;
+  locationPreference: string;
+};
+
+type DiscoverResponse = {
+  candidates: DiscoverCandidate[];
+  emptyReason?: string | null;
+};
+
+type ProgressResponse = {
+  progress: {
+    current_step: number;
+    completed: boolean;
+    total_steps: number;
+    mode: WizardMode;
+  };
+  draft: Record<string, string | number>;
+};
+
+type ChatMessage = {
+  id: string;
+  sender_id: string;
+  body: string;
+  type: "message" | "suggested_topic" | "decision_prompt" | "decision_complete" | "system";
+  created_at: string;
+};
+
+type ThreadResponse = {
+  conversation: { id: string };
+  messages: ChatMessage[];
+  decisionTrack: {
+    day_number: number;
+    status: "pending" | "in_progress" | "completed";
+    prompt_id: string;
+  };
+  suggestedTopics: string[];
 };
 
 type QuestionOption = {
@@ -332,16 +368,6 @@ function toLabel(value: string): string {
     .join(" ");
 }
 
-function scoreLabel(score: number): string {
-  if (score >= 70) {
-    return "Strong";
-  }
-  if (score >= 50) {
-    return "Balanced";
-  }
-  return "Developing";
-}
-
 function likertFromScore(score: number): string {
   const mapped = Math.round(score / 20);
   return String(Math.min(5, Math.max(1, mapped || 3)));
@@ -377,132 +403,213 @@ function valuesFromProfile(profile: OnboardingProfile): WizardValues {
 }
 
 export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
-  const [tab, setTab] = useState<AppTab>("discover");
+  const [tab, setTab] = useState<AppTab>("home");
   const [mode, setMode] = useState<WizardMode>("fast");
   const [questionIndex, setQuestionIndex] = useState(0);
   const [values, setValues] = useState<WizardValues>(initialValues);
   const [loading, setLoading] = useState(false);
+  const [isSubmittingAnswer, setIsSubmittingAnswer] = useState(false);
+  const [loadingProgress, setLoadingProgress] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState<OnboardingResponse | null>(null);
   const [matches, setMatches] = useState<MatchResult[]>([]);
-  const [track, setTrack] = useState<DecisionTrackResponse | null>(null);
+  const [matchesEmptyReason, setMatchesEmptyReason] = useState<string | null>(null);
   const [savedBanner, setSavedBanner] = useState<string | null>(null);
   const [photos, setPhotos] = useState<UserPhoto[]>([]);
   const [uploadingSlot, setUploadingSlot] = useState<number | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
+  const [discoverCandidates, setDiscoverCandidates] = useState<DiscoverCandidate[]>([]);
+  const [discoverEmptyReason, setDiscoverEmptyReason] = useState<string | null>(null);
+  const [pairCode, setPairCode] = useState<string | null>(null);
+  const [joinCode, setJoinCode] = useState("");
+  const [threadParticipantId, setThreadParticipantId] = useState<string | null>(null);
+  const [thread, setThread] = useState<ThreadResponse | null>(null);
+  const [chatDraft, setChatDraft] = useState("");
 
-  const questions = useMemo(() => {
-    if (mode === "fast") {
-      return fastQuestions;
-    }
-    return [...fastQuestions, ...deepQuestions];
-  }, [mode]);
+  const questions = useMemo(() => (mode === "fast" ? fastQuestions : [...fastQuestions, ...deepQuestions]), [mode]);
+  const totalSteps = questions.length;
+  const currentQuestion = questions[Math.min(questionIndex, totalSteps - 1)] ?? questions[0]!;
+  const currentValue = getFieldValue(values, currentQuestion.field);
 
-  const currentQuestion = questions[questionIndex] ?? questions[0]!;
-  const progress = ((questionIndex + 1) / questions.length) * 100;
-
-  useEffect(() => {
-    setQuestionIndex((prev) => Math.min(prev, questions.length - 1));
-  }, [questions.length]);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadSavedOnboarding() {
-      const response = await fetch("/api/onboarding/profile", { cache: "no-store" });
-      if (!response.ok) {
-        return;
-      }
-      const data = (await response.json()) as OnboardingResponse & { profile: OnboardingProfile | null };
-      if (!data.profile || cancelled) {
-        return;
-      }
-      setSaved({ profile: data.profile, tendenciesSummary: data.tendenciesSummary ?? [] });
-      setValues(valuesFromProfile(data.profile));
-    }
-
-    void loadSavedOnboarding();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
-  useEffect(() => {
-    let cancelled = false;
-
-    async function loadPhotos() {
-      const response = await fetch("/api/photos", { cache: "no-store" });
-      if (!response.ok || cancelled) {
-        return;
-      }
-      const data = (await response.json()) as PhotosResponse;
-      setPhotos(data.photos ?? []);
-    }
-
-    void loadPhotos();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const onboardingCompleted = Boolean(saved);
 
   const canContinue = useMemo(() => {
-    const value = getFieldValue(values, currentQuestion.field).trim();
+    const value = currentValue.trim();
     if (currentQuestion.field === "firstName") {
       return value.length >= 2;
     }
 
     if (currentQuestion.kind === "number") {
       const parsed = Number(value);
-      if (Number.isNaN(parsed)) {
-        return false;
-      }
-      if (typeof currentQuestion.min === "number" && parsed < currentQuestion.min) {
-        return false;
-      }
-      if (typeof currentQuestion.max === "number" && parsed > currentQuestion.max) {
-        return false;
-      }
+      if (Number.isNaN(parsed)) return false;
+      if (typeof currentQuestion.min === "number" && parsed < currentQuestion.min) return false;
+      if (typeof currentQuestion.max === "number" && parsed > currentQuestion.max) return false;
     }
 
     return value.length > 0;
-  }, [currentQuestion, values]);
+  }, [currentQuestion, currentValue]);
 
-  async function submitOnboarding(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
+  const progress = ((questionIndex + 1) / totalSteps) * 100;
+
+  const hydrate = useCallback(async () => {
+    setLoadingProgress(true);
+    setError(null);
+
+    try {
+      const [progressRes, profileRes, photosRes, discoverRes] = await Promise.all([
+        fetch("/api/onboarding/progress", { cache: "no-store" }),
+        fetch("/api/onboarding/profile", { cache: "no-store" }),
+        fetch("/api/photos", { cache: "no-store" }),
+        fetch("/api/discover", { cache: "no-store" })
+      ]);
+
+      if (progressRes.ok) {
+        const progressPayload = (await progressRes.json()) as ProgressResponse;
+        setMode(progressPayload.progress.mode);
+        setQuestionIndex(Math.max(0, Math.min(progressPayload.progress.current_step - 1, progressPayload.progress.total_steps - 1)));
+
+        const nextValues = { ...initialValues };
+        const questionMap = [...fastQuestions, ...deepQuestions];
+        for (const question of questionMap) {
+          const raw = progressPayload.draft[question.id];
+          if (typeof raw === "string" || typeof raw === "number") {
+            Object.assign(nextValues, setFieldValue(nextValues, question.field, String(raw)));
+          }
+        }
+        setValues((prev) => ({ ...prev, ...nextValues }));
+      }
+
+      if (profileRes.ok) {
+        const profilePayload = (await profileRes.json()) as { profile: OnboardingProfile | null; tendenciesSummary: string[] };
+        if (profilePayload.profile) {
+          setSaved({ profile: profilePayload.profile, tendenciesSummary: profilePayload.tendenciesSummary ?? [] });
+          setValues(valuesFromProfile(profilePayload.profile));
+        }
+      }
+
+      if (photosRes.ok) {
+        const photosPayload = (await photosRes.json()) as PhotosResponse;
+        setPhotos(photosPayload.photos ?? []);
+      }
+
+      if (discoverRes.ok) {
+        const discoverPayload = (await discoverRes.json()) as DiscoverResponse;
+        setDiscoverCandidates(discoverPayload.candidates ?? []);
+        setDiscoverEmptyReason(discoverPayload.emptyReason ?? null);
+      }
+    } catch {
+      setError("Could not load profile state.");
+    } finally {
+      setLoadingProgress(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void hydrate();
+  }, [hydrate]);
+
+  useEffect(() => {
+    const controller = new AbortController();
+
+    async function logStepViewed() {
+      await fetch("/api/onboarding/progress", {
+        method: "POST",
+        headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          currentStep: questionIndex + 1,
+          totalSteps,
+          mode,
+          completed: false
+        }),
+        signal: controller.signal
+      }).catch(() => undefined);
+    }
+
+    if (!onboardingCompleted && !loadingProgress) {
+      void logStepViewed();
+    }
+
+    return () => controller.abort();
+  }, [questionIndex, totalSteps, mode, onboardingCompleted, loadingProgress]);
+
+  const persistCurrentAnswer = useCallback(async (nextStep: number) => {
+    const payload = {
+      questionId: currentQuestion.id,
+      value: currentQuestion.kind === "number" ? Number(currentValue) : currentValue,
+      currentStep: questionIndex + 1,
+      nextStep,
+      totalSteps,
+      mode
+    };
+
+    const response = await fetch("/api/onboarding/answer", {
+      method: "POST",
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify(payload)
+    });
+
+    if (!response.ok) {
+      const data = (await response.json().catch(() => null)) as { error?: string; details?: { message?: string } } | null;
+      throw new Error(`${data?.error ?? "Could not persist answer."} ${data?.details?.message ?? ""}`.trim());
+    }
+  }, [currentQuestion.id, currentQuestion.kind, currentValue, questionIndex, totalSteps, mode]);
+
+  const handleAdvance = useCallback(async () => {
+    if (!canContinue || isSubmittingAnswer) return;
+
+    setIsSubmittingAnswer(true);
+    setError(null);
+    try {
+      const nextStep = questionIndex + 2;
+      await persistCurrentAnswer(nextStep);
+      setQuestionIndex((prev) => Math.min(prev + 1, totalSteps - 1));
+    } catch (cause) {
+      const message = cause instanceof Error ? cause.message : "Could not advance onboarding.";
+      setError(message);
+    } finally {
+      setIsSubmittingAnswer(false);
+    }
+  }, [canContinue, isSubmittingAnswer, questionIndex, totalSteps, persistCurrentAnswer]);
+
+  const handleSubmitOnboarding = useCallback(async () => {
+    if (!canContinue || loading || isSubmittingAnswer) return;
+
     setLoading(true);
     setError(null);
 
-    const payload = {
-      firstName: values.firstName,
-      ageRange: values.ageRange,
-      locationPreference: values.locationPreference,
-      lookingFor: values.lookingFor,
-      timelineMonths: Number(values.timelineMonths),
-      readiness: Number(values.readiness),
-      weeklyCapacity: Number(values.weeklyCapacity),
-      attachment: {
-        anxiety: values.attachmentAnxiety.map(Number),
-        avoidance: values.attachmentAvoidance.map(Number)
-      },
-      conflict: {
-        startupSoftness: Number(values.startupSoftness),
-        repairAfterConflict: Number(values.repairAfterConflict)
-      },
-      regulation: {
-        calmUnderStress: Number(values.calmUnderStress),
-        pauseBeforeReacting: Number(values.pauseBeforeReacting)
-      },
-      personality: {
-        openness: Number(values.openness),
-        conscientiousness: Number(values.conscientiousness),
-        extraversion: Number(values.extraversion),
-        agreeableness: Number(values.agreeableness),
-        emotionalStability: Number(values.emotionalStability)
-      },
-      noveltyPreference: Number(values.noveltyPreference)
-    };
-
     try {
+      await persistCurrentAnswer(totalSteps + 1);
+
+      const payload = {
+        firstName: values.firstName,
+        ageRange: values.ageRange,
+        locationPreference: values.locationPreference,
+        lookingFor: values.lookingFor,
+        timelineMonths: Number(values.timelineMonths),
+        readiness: Number(values.readiness),
+        weeklyCapacity: Number(values.weeklyCapacity),
+        attachment: {
+          anxiety: values.attachmentAnxiety.map(Number),
+          avoidance: values.attachmentAvoidance.map(Number)
+        },
+        conflict: {
+          startupSoftness: Number(values.startupSoftness),
+          repairAfterConflict: Number(values.repairAfterConflict)
+        },
+        regulation: {
+          calmUnderStress: Number(values.calmUnderStress),
+          pauseBeforeReacting: Number(values.pauseBeforeReacting)
+        },
+        personality: {
+          openness: Number(values.openness),
+          conscientiousness: Number(values.conscientiousness),
+          extraversion: Number(values.extraversion),
+          agreeableness: Number(values.agreeableness),
+          emotionalStability: Number(values.emotionalStability)
+        },
+        noveltyPreference: Number(values.noveltyPreference)
+      };
+
       const response = await fetch("/api/onboarding/complete", {
         method: "POST",
         headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
@@ -510,94 +617,112 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
       });
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as
-          | {
-              error?: string;
-              details?: { fieldErrors?: Record<string, string[]>; message?: string | null; code?: string | null };
-            }
-          | null;
-        const detail = payload?.details?.fieldErrors
-          ? Object.entries(payload.details.fieldErrors)
-              .filter(([, msgs]) => (msgs ?? []).length > 0)
-              .slice(0, 1)
-              .map(([field, msgs]) => `${field}: ${msgs?.[0]}`)
-              .join(", ")
-          : "";
-        const detailMessage = payload?.details?.message ? ` ${payload.details.message}` : "";
-        setError(
-          detail
-            ? `Could not save onboarding. ${detail}`
-            : `${payload?.error ?? "Could not save onboarding."}${detailMessage}`
-        );
+        const res = (await response.json().catch(() => null)) as { error?: string; details?: { message?: string } } | null;
+        setError(`${res?.error ?? "Could not save onboarding."} ${res?.details?.message ?? ""}`.trim());
         return;
       }
 
       const data = (await response.json()) as OnboardingResponse;
       setSaved(data);
       setSavedBanner("Onboarding saved successfully.");
+
+      await fetch("/api/onboarding/progress", {
+        method: "POST",
+        headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ currentStep: totalSteps, totalSteps, mode, completed: true })
+      });
+
       setTab("matches");
-    } catch {
-      setError("Request failed. Please try again.");
+      await loadMatches();
     } finally {
       setLoading(false);
     }
-  }
+  }, [canContinue, loading, isSubmittingAnswer, values, totalSteps, mode, persistCurrentAnswer]);
 
   async function loadMatches() {
     setError(null);
-    const response = await fetch("/api/matches/preview");
+    const response = await fetch("/api/matches/preview", { cache: "no-store" });
     if (!response.ok) {
-      setError("Could not load matches right now.");
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      setError(payload?.error ?? "Could not load match results.");
       return;
     }
     const data = (await response.json()) as MatchResponse;
-    setMatches(data.matches);
+    setMatches(data.matches ?? []);
+    setMatchesEmptyReason(data.emptyReason ?? null);
   }
 
-  async function startTrack() {
-    setError(null);
-    const response = await fetch("/api/decision-track/start", {
+  async function loadDiscover() {
+    const response = await fetch("/api/discover", { cache: "no-store" });
+    if (!response.ok) {
+      setDiscoverCandidates([]);
+      setDiscoverEmptyReason("Could not load Discover.");
+      return;
+    }
+    const payload = (await response.json()) as DiscoverResponse;
+    setDiscoverCandidates(payload.candidates ?? []);
+    setDiscoverEmptyReason(payload.emptyReason ?? null);
+  }
+
+  async function createPairCode() {
+    const response = await fetch("/api/pair-code/create", {
       method: "POST",
       headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ start: true })
+      body: JSON.stringify({ create: true })
+    });
+
+    if (!response.ok) {
+      setError("Could not create pair code.");
+      return;
+    }
+
+    const payload = (await response.json()) as { pairCode?: { code: string } };
+    setPairCode(payload.pairCode?.code ?? null);
+  }
+
+  async function joinPairCode() {
+    const response = await fetch("/api/pair-code/join", {
+      method: "POST",
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ code: joinCode })
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      setError(payload?.error ?? "Could not join pair code.");
+      return;
+    }
+
+    setJoinCode("");
+    await loadDiscover();
+    await loadMatches();
+  }
+
+  async function openThread(participantId: string) {
+    setThreadParticipantId(participantId);
+    const response = await fetch(`/api/chat/thread?participantId=${participantId}`, { cache: "no-store" });
+    if (!response.ok) {
+      setError("Could not load guided chat.");
+      return;
+    }
+    const payload = (await response.json()) as ThreadResponse;
+    setThread(payload);
+  }
+
+  async function postThread(action: "send_message" | "send_topic" | "start_day" | "complete_day", body?: string) {
+    if (!threadParticipantId) return;
+
+    const response = await fetch("/api/chat/thread", {
+      method: "POST",
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ participantId: threadParticipantId, action, body })
     });
     if (!response.ok) {
-      setError("Could not start decision track.");
+      setError("Could not update chat.");
       return;
     }
-    const data = (await response.json()) as DecisionTrackResponse;
-    setTrack(data);
-  }
 
-  async function advanceTrack(action: "complete_reflection" | "advance_day") {
-    if (!track?.track.id) {
-      return;
-    }
-    setError(null);
-    const response = await fetch("/api/decision-track/advance", {
-      method: "POST",
-      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ trackId: track.track.id, action })
-    });
-    if (!response.ok) {
-      setError("Could not update decision track.");
-      return;
-    }
-    const data = (await response.json()) as DecisionTrackResponse;
-    setTrack(data);
-  }
-
-  async function sendCalibration(feltRight: number) {
-    await fetch("/api/matches/calibration", {
-      method: "POST",
-      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ feltRight })
-    });
-  }
-
-  async function signOut() {
-    await fetch("/api/auth/logout", { method: "POST", headers: await withCsrfHeaders() });
-    window.location.href = "/login";
+    await openThread(threadParticipantId);
   }
 
   async function uploadPhoto(slot: number, file: File) {
@@ -629,24 +754,49 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
         const without = prev.filter((photo) => photo.slot !== payload.photo.slot);
         return [...without, payload.photo].sort((a, b) => a.slot - b.slot);
       });
-    } catch {
-      setPhotoError("Upload failed. Please try again.");
     } finally {
       setUploadingSlot(null);
     }
   }
 
+  async function resetOnboarding() {
+    const response = await fetch("/api/onboarding/reset?dev=1", {
+      method: "POST",
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ reset: true })
+    });
+    if (!response.ok) {
+      setError("Could not reset onboarding.");
+      return;
+    }
+
+    setValues(initialValues);
+    setQuestionIndex(0);
+    setSaved(null);
+    setSavedBanner("Onboarding reset.");
+    setTab("home");
+    await hydrate();
+  }
+
+  async function signOut() {
+    await fetch("/api/auth/logout", { method: "POST", headers: await withCsrfHeaders() });
+    window.location.href = "/login";
+  }
+
   const profile = saved?.profile;
   const displayName = (profile?.firstName ?? values.firstName.trim()) || (firstName ?? "You");
-  const currentValue = getFieldValue(values, currentQuestion.field);
+  const showReset = typeof window !== "undefined" && (window.location.search.includes("dev=1") || process.env.NODE_ENV !== "production");
 
   return (
     <section className="app-shell">
       <header className="app-header">
-        <p className="eyebrow">Discover</p>
+        <p className="eyebrow">Today</p>
         <h1>Hey, {displayName}</h1>
-        <p className="muted">Intent-first dating with calm, premium pacing.</p>
-        <div className="trust-chip">High-trust matching. No swipe mechanics.</div>
+        {!onboardingCompleted ? (
+          <div className="trust-chip">Finish setup to unlock Discover, Matches, and Guided Chat.</div>
+        ) : (
+          <div className="trust-chip">Profile complete. Continue your match conversations with Day-by-day prompts.</div>
+        )}
       </header>
 
       <AnimatePresence mode="wait" initial={false}>
@@ -658,154 +808,116 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
           exit={{ opacity: 0, y: -10 }}
           transition={{ duration: 0.24, ease: [0.22, 1, 0.36, 1] }}
         >
-          {tab === "discover" ? (
+          {loadingProgress ? <section className="panel"><p className="muted">Loading profile...</p></section> : null}
+
+          {tab === "home" ? (
             <div className="stack">
               <section className="panel panel-tight onboarding-top">
-                <div className="mode-picker" role="radiogroup" aria-label="Setup mode">
-                  <button
-                    type="button"
-                    className={mode === "fast" ? "mode-chip active" : "mode-chip"}
-                    onClick={() => setMode("fast")}
-                    aria-pressed={mode === "fast"}
-                  >
-                    Fast
-                  </button>
-                  <button
-                    type="button"
-                    className={mode === "deep" ? "mode-chip active" : "mode-chip"}
-                    onClick={() => setMode("deep")}
-                    aria-pressed={mode === "deep"}
-                  >
-                    Deep
-                  </button>
+                <h2>Next Action</h2>
+                <p className="muted">{onboardingCompleted ? "Review your profile or open Matches." : `Continue onboarding at card ${questionIndex + 1} of ${totalSteps}.`}</p>
+                <div className="actions">
+                  {!onboardingCompleted ? (
+                    <button type="button" onClick={() => setTab("home")}>Continue setup</button>
+                  ) : (
+                    <button type="button" onClick={() => setTab("matches")}>Open matches</button>
+                  )}
                 </div>
-                <p className="muted small">{mode === "fast" ? "3-card sprint" : "20-card precision onboarding"}</p>
               </section>
 
-              <form onSubmit={submitOnboarding} className="stack">
+              {!onboardingCompleted ? (
                 <section className="panel onboarding-card elevated">
                   <div className="progress-wrap" aria-hidden="true">
-                    <span className="progress-text">
-                      Card {questionIndex + 1} of {questions.length}
-                    </span>
+                    <span className="progress-text">Card {questionIndex + 1} of {totalSteps}</span>
                     <div className="progress-track">
-                      <motion.span
-                        className="progress-fill"
-                        initial={false}
-                        animate={{ width: `${progress}%` }}
-                        transition={{ duration: 0.2, ease: "easeOut" }}
-                      />
+                      <motion.span className="progress-fill" initial={false} animate={{ width: `${progress}%` }} transition={{ duration: 0.2, ease: "easeOut" }} />
                     </div>
                   </div>
 
+                  <div className="mode-picker" role="radiogroup" aria-label="Setup mode">
+                    <button type="button" className={mode === "fast" ? "mode-chip active" : "mode-chip"} onClick={() => setMode("fast")} aria-pressed={mode === "fast"}>Fast</button>
+                    <button type="button" className={mode === "deep" ? "mode-chip active" : "mode-chip"} onClick={() => setMode("deep")} aria-pressed={mode === "deep"}>Deep</button>
+                  </div>
+
                   <AnimatePresence mode="wait" initial={false}>
-                    <motion.div
-                      key={currentQuestion.id}
-                      className="question-card stage-card"
-                      initial={{ opacity: 0, x: 16 }}
-                      animate={{ opacity: 1, x: 0 }}
-                      exit={{ opacity: 0, x: -16 }}
-                      transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}
-                    >
+                    <motion.div key={currentQuestion.id} className="question-card stage-card" initial={{ opacity: 0, x: 16 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -16 }} transition={{ duration: 0.22, ease: [0.22, 1, 0.36, 1] }}>
                       <p className="eyebrow">Onboarding</p>
-                      <label className="question-label" htmlFor={currentQuestion.id}>
-                        {currentQuestion.title}
-                      </label>
+                      <label className="question-label" htmlFor={currentQuestion.id}>{currentQuestion.title}</label>
                       <p className="muted">{currentQuestion.description}</p>
                       {currentQuestion.kind === "text" ? (
-                        <input
-                          id={currentQuestion.id}
-                          value={currentValue}
-                          onChange={(event) =>
-                            setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
-                          }
-                          autoComplete="given-name"
-                          placeholder="Enter your first name"
-                        />
+                        <input id={currentQuestion.id} value={currentValue} onChange={(event) => setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))} autoComplete="given-name" placeholder="Enter your first name" />
                       ) : null}
                       {currentQuestion.kind === "number" ? (
                         <div className="number-control">
-                          <input
-                            id={currentQuestion.id}
-                            className="range-input"
-                            type="range"
-                            min={currentQuestion.min}
-                            max={currentQuestion.max}
-                            value={currentValue}
-                            onChange={(event) =>
-                              setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
-                            }
-                          />
-                          <input
-                            aria-label={currentQuestion.title}
-                            type="number"
-                            min={currentQuestion.min}
-                            max={currentQuestion.max}
-                            value={currentValue}
-                            onChange={(event) =>
-                              setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))
-                            }
-                          />
+                          <input id={currentQuestion.id} className="range-input" type="range" min={currentQuestion.min} max={currentQuestion.max} value={currentValue} onChange={(event) => setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))} />
+                          <input type="number" min={currentQuestion.min} max={currentQuestion.max} value={currentValue} onChange={(event) => setValues((prev) => setFieldValue(prev, currentQuestion.field, event.target.value))} />
                         </div>
                       ) : null}
                       {currentQuestion.kind === "select" ? (
                         <div className="option-grid" role="group" aria-label={currentQuestion.title}>
                           {currentQuestion.options?.map((option) => (
-                            <button
-                              key={option.value}
-                              type="button"
-                              className={currentValue === option.value ? "answer-chip active" : "answer-chip"}
-                              onClick={() => setValues((prev) => setFieldValue(prev, currentQuestion.field, option.value))}
-                              aria-pressed={currentValue === option.value}
-                            >
-                              {option.label}
-                            </button>
+                            <button key={option.value} type="button" className={currentValue === option.value ? "answer-chip active" : "answer-chip"} onClick={() => setValues((prev) => setFieldValue(prev, currentQuestion.field, option.value))} aria-pressed={currentValue === option.value}>{option.label}</button>
                           ))}
                         </div>
-                      ) : null}
-
-                      {currentQuestion.field === "firstName" &&
-                      values.firstName.trim().length > 0 &&
-                      values.firstName.trim().length < 2 ? (
-                        <p className="inline-error">Name should be at least 2 characters.</p>
                       ) : null}
                     </motion.div>
                   </AnimatePresence>
 
                   <div className="actions">
-                    <button
-                      type="button"
-                      disabled={questionIndex === 0 || loading}
-                      onClick={() => setQuestionIndex((prev) => prev - 1)}
-                      className="ghost"
-                    >
-                      Previous
-                    </button>
-                    {questionIndex < questions.length - 1 ? (
-                      <button
-                        type="button"
-                        disabled={!canContinue || loading}
-                        onClick={() => setQuestionIndex((prev) => prev + 1)}
-                      >
-                        Continue
-                      </button>
+                    <button type="button" disabled={questionIndex === 0 || isSubmittingAnswer || loading} className="ghost" onClick={() => setQuestionIndex((prev) => Math.max(0, prev - 1))}>Previous</button>
+                    {questionIndex < totalSteps - 1 ? (
+                      <button type="button" disabled={!canContinue || isSubmittingAnswer || loading} onClick={handleAdvance}>{isSubmittingAnswer ? "Saving..." : "Continue"}</button>
                     ) : (
-                      <button type="submit" disabled={loading || !canContinue}>
-                        {loading ? "Saving..." : "Save onboarding"}
-                      </button>
+                      <button type="button" disabled={!canContinue || loading || isSubmittingAnswer} onClick={handleSubmitOnboarding}>{loading ? "Saving..." : "Save onboarding"}</button>
                     )}
                   </div>
                 </section>
-              </form>
+              ) : null}
 
               {savedBanner ? <p className="inline-ok">{savedBanner}</p> : null}
-              <section className="panel panel-tight">
+              {showReset ? (
+                <section className="panel panel-tight">
+                  <h3>Dev panel</h3>
+                  <p className="muted tiny">user_id: {userId} | step: {questionIndex + 1}/{totalSteps} | candidates: {discoverCandidates.length} | matches: {matches.length}</p>
+                  <div className="actions">
+                    <button type="button" className="ghost" onClick={resetOnboarding}>Reset onboarding</button>
+                  </div>
+                </section>
+              ) : null}
+            </div>
+          ) : null}
+
+          {tab === "discover" ? (
+            <div className="stack">
+              {!onboardingCompleted ? <section className="panel panel-tight"><p className="muted">Finish setup first to get accurate discovery.</p><div className="actions"><button type="button" onClick={() => setTab("home")}>Finish setup</button></div></section> : null}
+
+              <section className="panel">
+                <h2>Invite friend</h2>
+                <p className="muted">Generate a pair code and ask your friend to join.</p>
                 <div className="actions">
-                  <button type="button" className="ghost" onClick={signOut}>
-                    Sign out
-                  </button>
+                  <button type="button" onClick={createPairCode}>Generate pair code</button>
+                  {pairCode ? <span className="trust-chip">Code: {pairCode}</span> : null}
                 </div>
-                <p className="muted tiny">User ID: {userId}</p>
+                <label>
+                  Join with code
+                  <input value={joinCode} onChange={(event) => setJoinCode(event.target.value.toUpperCase())} placeholder="ABC1234" />
+                </label>
+                <div className="actions">
+                  <button type="button" onClick={joinPairCode} disabled={joinCode.trim().length < 6}>Join code</button>
+                  <button type="button" className="ghost" onClick={loadDiscover}>Refresh Discover</button>
+                </div>
+              </section>
+
+              <section className="panel">
+                <h3>Discover pool</h3>
+                {discoverCandidates.length === 0 ? <p className="muted">{discoverEmptyReason ?? "No candidates yet."}</p> : null}
+                <div className="stack">
+                  {discoverCandidates.map((candidate) => (
+                    <article key={candidate.id} className="prompt-card">
+                      <strong>{candidate.firstName}</strong>
+                      <p className="muted">{toLabel(candidate.ageRange)} · {toLabel(candidate.locationPreference)}</p>
+                    </article>
+                  ))}
+                </div>
               </section>
             </div>
           ) : null}
@@ -813,239 +925,136 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
           {tab === "matches" ? (
             <div className="stack">
               <section className="panel">
-                <h2>Match Preview</h2>
-                <p className="muted">Compatibility previews remain read-only in this phase.</p>
+                <h2>Matches</h2>
+                <p className="muted">See compatible matches and move into guided chat.</p>
                 <div className="actions">
-                  <button type="button" onClick={loadMatches} disabled={!saved}>
-                    See compatibility preview
-                  </button>
-                  <button type="button" onClick={startTrack} disabled={!saved}>
-                    Start 14-day decision track
-                  </button>
+                  <button type="button" onClick={loadMatches} disabled={!onboardingCompleted}>Load match results</button>
                 </div>
+                {!onboardingCompleted ? <p className="muted">Finish onboarding to generate matches.</p> : null}
+                {matches.length === 0 && onboardingCompleted ? <p className="muted">{matchesEmptyReason ?? "No matches yet."}</p> : null}
               </section>
 
-              {!saved ? (
-                <section className="panel panel-tight">
-                  <p className="muted">Complete onboarding in Discover to unlock matches.</p>
-                </section>
-              ) : null}
-
-              {saved ? (
-                <section className="panel">
-                  <h3>Your tendencies</h3>
+              {matches.map((match) => (
+                <section key={match.candidateId} className="panel">
+                  <p className="eyebrow">{match.totalScore}/100 compatibility</p>
+                  <h3>{match.candidateFirstName}</h3>
                   <ul className="list">
-                    {saved.tendenciesSummary.map((line) => (
-                      <li key={line}>{line}</li>
+                    {match.topFitReasons.map((reason) => (
+                      <li key={reason}>{reason}</li>
                     ))}
                   </ul>
-                </section>
-              ) : null}
-
-              {matches.length > 0 ? (
-                <section className="stack">
-                  {matches.map((match) => (
-                    <article key={match.candidateId} className="panel">
-                      <p className="eyebrow">{match.totalScore}/100 match</p>
-                      <h3>{match.candidateFirstName}</h3>
-                      <p className="muted">Top fit signals</p>
-                      <ul className="list">
-                        {match.topFitReasons.map((reason) => (
-                          <li key={reason}>{reason}</li>
-                        ))}
-                      </ul>
-                      <p className="muted">Potential friction points</p>
-                      <ul className="list">
-                        {match.potentialFrictionPoints.map((reason) => (
-                          <li key={reason}>{reason}</li>
-                        ))}
-                      </ul>
-                      <div className="actions">
-                        <button type="button" onClick={() => sendCalibration(5)}>
-                          Felt right
-                        </button>
-                        <button type="button" className="ghost" onClick={() => sendCalibration(2)}>
-                          Felt off
-                        </button>
-                      </div>
-                    </article>
-                  ))}
-                </section>
-              ) : null}
-
-              {track ? (
-                <section className="panel">
-                  <h3>Decision Track</h3>
-                  <p className="muted">
-                    State: {track.track.state} | Day: {track.track.day}
-                  </p>
-                  <p>{track.prompt}</p>
-                  <p className="muted">{getNudge(track.track.state, track.track.day)}</p>
                   <div className="actions">
-                    <button type="button" onClick={() => advanceTrack("complete_reflection")}>
-                      Complete reflection
-                    </button>
-                    <button type="button" className="ghost" onClick={() => advanceTrack("advance_day")}>
-                      Advance day
-                    </button>
+                    <button type="button" onClick={() => openThread(match.candidateId)}>Open guided chat</button>
                   </div>
-                  <details>
-                    <summary>Respectful close-the-loop templates</summary>
-                    <ul className="list">
-                      <li>{getClosureTemplate("continue")}</li>
-                      <li>{getClosureTemplate("pause")}</li>
-                      <li>{getClosureTemplate("close")}</li>
-                    </ul>
-                  </details>
+                </section>
+              ))}
+
+              {thread && threadParticipantId ? (
+                <section className="panel">
+                  <h3>Guided chat</h3>
+                  <p className="muted">Day {thread.decisionTrack.day_number} of 14 · {thread.decisionTrack.status}</p>
+                  <div className="actions">
+                    <button type="button" className="ghost" onClick={() => postThread("start_day")}>Start today&apos;s prompt</button>
+                    <button type="button" className="ghost" onClick={() => postThread("complete_day")}>Complete today</button>
+                  </div>
+
+                  <p className="muted">Suggested topics</p>
+                  <div className="actions">
+                    {thread.suggestedTopics.slice(0, 3).map((topic) => (
+                      <button key={topic} type="button" className="ghost" onClick={() => postThread("send_topic", topic)}>{topic}</button>
+                    ))}
+                  </div>
+
+                  <div className="stack">
+                    {thread.messages.map((message) => (
+                      <article key={message.id} className="prompt-card">
+                        <p className="tiny muted">{message.type}</p>
+                        <p>{message.body}</p>
+                      </article>
+                    ))}
+                  </div>
+
+                  <label>
+                    Message
+                    <input value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="Type a message" />
+                  </label>
+                  <div className="actions">
+                    <button type="button" onClick={() => { void postThread("send_message", chatDraft); setChatDraft(""); }} disabled={chatDraft.trim().length < 1}>Send</button>
+                    <button type="button" className="ghost" onClick={() => openThread(threadParticipantId)}>Refresh chat</button>
+                  </div>
                 </section>
               ) : null}
             </div>
           ) : null}
 
-          {tab === "profile" ? (
+          {tab === "me" ? (
             <div className="stack">
               <section className="panel profile-hero elevated">
-                <p className="eyebrow">Profile</p>
+                <p className="eyebrow">Me</p>
                 <h2>{displayName}</h2>
                 <p className="muted">Intent: {toLabel(profile?.intent.lookingFor ?? values.lookingFor)}</p>
-                <div className="profile-meta">
-                  <span className="meta-pill">{toLabel(profile?.ageRange ?? values.ageRange)}</span>
-                  <span className="meta-pill">{toLabel(profile?.locationPreference ?? values.locationPreference)}</span>
+                <div className="actions">
+                  <button type="button" className="ghost" onClick={() => setTab("home")}>About You (edit onboarding)</button>
                 </div>
               </section>
 
               <section className="panel">
-                <h3>Photo placeholders</h3>
-                <p className="muted">Upload up to 6 photos. Each photo replaces its slot.</p>
+                <h3>Photos</h3>
+                <p className="muted">Upload, replace, and manage up to 6 photos.</p>
                 <div className="photo-grid" aria-label="Profile photo placeholders">
                   {Array.from({ length: 6 }).map((_, index) => {
                     const slot = index + 1;
                     const slotPhoto = photos.find((photo) => photo.slot === slot);
-
                     return (
-                    <article key={`photo-${index}`} className="photo-slot">
-                      {slotPhoto ? (
-                        <Image
-                          src={slotPhoto.url}
-                          alt={`Profile photo slot ${slot}`}
-                          className="photo-preview"
-                          width={400}
-                          height={520}
-                          unoptimized
-                        />
-                      ) : (
-                        <span>Photo {slot}</span>
-                      )}
-                      <label className="upload-button">
-                        {uploadingSlot === slot ? "Uploading..." : slotPhoto ? "Replace" : "Upload"}
-                        <input
-                          type="file"
-                          accept="image/*"
-                          disabled={uploadingSlot === slot}
-                          onChange={(event) => {
-                            const file = event.target.files?.[0];
-                            if (!file) {
-                              return;
-                            }
-                            void uploadPhoto(slot, file);
-                            event.currentTarget.value = "";
-                          }}
-                        />
-                      </label>
-                    </article>
+                      <article key={`photo-${index}`} className="photo-slot">
+                        {slotPhoto ? (
+                          <Image src={slotPhoto.url} alt={`Profile photo slot ${slot}`} className="photo-preview" width={400} height={520} unoptimized />
+                        ) : (
+                          <span>Photo {slot}</span>
+                        )}
+                        <label className="upload-button">
+                          {uploadingSlot === slot ? "Uploading..." : slotPhoto ? "Replace" : "Upload"}
+                          <input
+                            type="file"
+                            accept="image/*"
+                            disabled={uploadingSlot === slot}
+                            onChange={(event) => {
+                              const file = event.target.files?.[0];
+                              if (!file) return;
+                              void uploadPhoto(slot, file);
+                              event.currentTarget.value = "";
+                            }}
+                          />
+                        </label>
+                      </article>
                     );
                   })}
                 </div>
                 {photoError ? <p className="inline-error">{photoError}</p> : null}
               </section>
 
-              <section className="panel">
-                <h3>Prompts</h3>
-                <div className="prompt-grid">
-                  <article className="prompt-card">
-                    <p className="prompt-q">My relationship pace works best when...</p>
-                    <p>
-                      we align on a {profile?.intent.timelineMonths ?? Number(values.timelineMonths)}-month timeline and
-                      keep dating consistent.
-                    </p>
-                  </article>
-                  <article className="prompt-card">
-                    <p className="prompt-q">A green flag for me is...</p>
-                    <p>
-                      someone who scores {scoreLabel(profile?.tendencies.conflictRepair ?? Number(values.repairAfterConflict) * 20)} in
-                      repair habits after conflict.
-                    </p>
-                  </article>
-                  <article className="prompt-card">
-                    <p className="prompt-q">I feel most connected when...</p>
-                    <p>
-                      both people respect emotional pacing and communication style ({toLabel(
-                        profile?.locationPreference ?? values.locationPreference
-                      )}).
-                    </p>
-                  </article>
+              <section className="panel panel-tight">
+                <div className="actions">
+                  <button type="button" className="ghost" onClick={signOut}>Sign out</button>
                 </div>
-              </section>
-
-              <section className="panel">
-                <h3>Structured Snapshot</h3>
-                <div className="stats-grid">
-                  <article className="metric">
-                    <span>Readiness</span>
-                    <strong>{profile?.intent.readiness ?? Number(values.readiness)}/5</strong>
-                  </article>
-                  <article className="metric">
-                    <span>Weekly capacity</span>
-                    <strong>{profile?.intent.weeklyCapacity ?? Number(values.weeklyCapacity)} dates</strong>
-                  </article>
-                  <article className="metric">
-                    <span>Attachment anxiety</span>
-                    <strong>{profile?.tendencies.attachmentAnxiety ?? Number(values.attachmentAnxiety[0]) * 20}</strong>
-                  </article>
-                  <article className="metric">
-                    <span>Emotional regulation</span>
-                    <strong>{profile?.tendencies.emotionalRegulation ?? Number(values.pauseBeforeReacting) * 20}</strong>
-                  </article>
-                </div>
+                <p className="muted tiny">User ID: {userId}</p>
               </section>
             </div>
           ) : null}
 
           {error ? (
             <section className="panel panel-tight">
-              <p role="alert" className="inline-error">
-                {error}
-              </p>
+              <p role="alert" className="inline-error">{error}</p>
             </section>
           ) : null}
         </motion.div>
       </AnimatePresence>
 
       <nav className="bottom-nav" aria-label="Main">
-        <button
-          type="button"
-          className={tab === "discover" ? "nav-item active" : "nav-item"}
-          onClick={() => setTab("discover")}
-        >
-          <span className="nav-dot" aria-hidden="true" />
-          <span>Discover</span>
-        </button>
-        <button
-          type="button"
-          className={tab === "matches" ? "nav-item active" : "nav-item"}
-          onClick={() => setTab("matches")}
-        >
-          <span className="nav-dot" aria-hidden="true" />
-          <span>Matches</span>
-        </button>
-        <button
-          type="button"
-          className={tab === "profile" ? "nav-item active" : "nav-item"}
-          onClick={() => setTab("profile")}
-        >
-          <span className="nav-dot" aria-hidden="true" />
-          <span>Profile</span>
-        </button>
+        <button type="button" className={tab === "home" ? "nav-item active" : "nav-item"} onClick={() => setTab("home")}><span className="nav-dot" aria-hidden="true" /><span>Home</span></button>
+        <button type="button" className={tab === "discover" ? "nav-item active" : "nav-item"} onClick={() => setTab("discover")}><span className="nav-dot" aria-hidden="true" /><span>Discover</span></button>
+        <button type="button" className={tab === "matches" ? "nav-item active" : "nav-item"} onClick={() => setTab("matches")}><span className="nav-dot" aria-hidden="true" /><span>Matches</span></button>
+        <button type="button" className={tab === "me" ? "nav-item active" : "nav-item"} onClick={() => setTab("me")}><span className="nav-dot" aria-hidden="true" /><span>Me</span></button>
       </nav>
     </section>
   );
