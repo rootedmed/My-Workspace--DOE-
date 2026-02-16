@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 type DebugPayload = {
   projectRef: string | null;
   healthReachable: boolean | null;
+  healthStatus: number | null;
   effectiveAnonKeyProjectRef: string | null;
   effectiveAnonKeyLooksValid: boolean;
   effectiveAnonKeyMatchesUrl: boolean | null;
@@ -57,6 +58,7 @@ export default function DebugPage() {
           <>
             <p><strong>Project ref:</strong> {data.projectRef ?? "Unavailable"}</p>
             <p><strong>Supabase host reachable:</strong> {String(data.healthReachable)}</p>
+            <p><strong>Supabase health status:</strong> {data.healthStatus ?? "Unavailable"}</p>
             <p><strong>Effective anon key ref:</strong> {data.effectiveAnonKeyProjectRef ?? "Unavailable"}</p>
             <p><strong>Effective anon valid:</strong> {String(data.effectiveAnonKeyLooksValid)}</p>
             <p><strong>Effective anon matches URL ref:</strong> {String(data.effectiveAnonKeyMatchesUrl)}</p>

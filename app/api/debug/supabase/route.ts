@@ -48,12 +48,24 @@ export async function GET() {
   const effectiveAnonKeyProjectRef = decodeJwtRef(effectiveAnonKey);
 
   let healthReachable: boolean | null = null;
+  let healthStatus: number | null = null;
   if (supabaseUrl) {
     try {
-      const response = await fetch(`${supabaseUrl}/auth/v1/health`, { method: "GET", cache: "no-store" });
-      healthReachable = response.ok;
+      const response = await fetch(`${supabaseUrl}/auth/v1/health`, {
+        method: "GET",
+        cache: "no-store",
+        headers: effectiveAnonKey
+          ? {
+              apikey: effectiveAnonKey,
+              Authorization: `Bearer ${effectiveAnonKey}`
+            }
+          : undefined
+      });
+      healthStatus = response.status;
+      healthReachable = true;
     } catch {
       healthReachable = false;
+      healthStatus = null;
     }
   }
 
@@ -61,6 +73,7 @@ export async function GET() {
     {
       projectRef,
       healthReachable,
+      healthStatus,
       effectiveAnonKeyProjectRef,
       effectiveAnonKeyLooksValid: Boolean(effectiveAnonKeyProjectRef),
       effectiveAnonKeyMatchesUrl:
