@@ -616,8 +616,11 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
       });
 
       if (!response.ok) {
-        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-        setPhotoError(payload?.error ?? "Could not upload photo.");
+        const payload = (await response.json().catch(() => null)) as
+          | { error?: string; details?: { message?: string | null; code?: string | null } }
+          | null;
+        const detail = payload?.details?.message ?? payload?.details?.code ?? "";
+        setPhotoError(`${payload?.error ?? "Could not upload photo."}${detail ? ` ${detail}` : ""}`);
         return;
       }
 

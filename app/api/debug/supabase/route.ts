@@ -39,15 +39,40 @@ function decodeJwtRef(token: string | undefined): string | null {
 export async function GET() {
   const supabaseUrl = process.env.SUPABASE_URL ?? process.env.NEXT_PUBLIC_SUPABASE_URL;
   const projectRef = extractProjectRef(supabaseUrl);
-  const anonKey = process.env.SUPABASE_ANON_KEY ?? process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
-  const anonKeyProjectRef = decodeJwtRef(anonKey);
+  const serverAnonKey = process.env.SUPABASE_ANON_KEY;
+  const publicAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY;
+  const effectiveAnonKey = serverAnonKey ?? publicAnonKey;
+
+  const serverAnonKeyProjectRef = decodeJwtRef(serverAnonKey);
+  const publicAnonKeyProjectRef = decodeJwtRef(publicAnonKey);
+  const effectiveAnonKeyProjectRef = decodeJwtRef(effectiveAnonKey);
+
+  let healthReachable: boolean | null = null;
+  if (supabaseUrl) {
+    try {
+      const response = await fetch(`${supabaseUrl}/auth/v1/health`, { method: "GET", cache: "no-store" });
+      healthReachable = response.ok;
+    } catch {
+      healthReachable = false;
+    }
+  }
 
   return NextResponse.json(
     {
       projectRef,
-      anonKeyProjectRef,
-      anonKeyLooksValid: Boolean(anonKeyProjectRef),
-      anonKeyMatchesUrl: projectRef !== null && anonKeyProjectRef !== null ? projectRef === anonKeyProjectRef : null,
+      healthReachable,
+      effectiveAnonKeyProjectRef,
+      effectiveAnonKeyLooksValid: Boolean(effectiveAnonKeyProjectRef),
+      effectiveAnonKeyMatchesUrl:
+        projectRef !== null && effectiveAnonKeyProjectRef !== null ? projectRef === effectiveAnonKeyProjectRef : null,
+      serverAnonKeyProjectRef,
+      serverAnonKeyLooksValid: Boolean(serverAnonKeyProjectRef),
+      serverAnonKeyMatchesUrl:
+        projectRef !== null && serverAnonKeyProjectRef !== null ? projectRef === serverAnonKeyProjectRef : null,
+      publicAnonKeyProjectRef,
+      publicAnonKeyLooksValid: Boolean(publicAnonKeyProjectRef),
+      publicAnonKeyMatchesUrl:
+        projectRef !== null && publicAnonKeyProjectRef !== null ? projectRef === publicAnonKeyProjectRef : null,
       runtime: process.env.VERCEL ? "vercel" : "local",
       nodeEnv: process.env.NODE_ENV ?? "unknown",
       env: {
