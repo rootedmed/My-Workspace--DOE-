@@ -49,7 +49,7 @@ export function ShareSnapshotButton({ data, appName }: { data: SnapshotPayload; 
   const [isWorking, setIsWorking] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
-  const rows = useMemo(
+  const rows = useMemo<Array<[string, string]>>(
     () => [
       ["Attachment Style", data.attachmentStyle],
       ["Conflict Style", data.conflictStyle],

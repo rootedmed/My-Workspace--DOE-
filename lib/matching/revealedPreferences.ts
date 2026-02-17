@@ -60,8 +60,11 @@ export function computeRevealedPreferences(
   const avgMessagedOpenness = mean(messaged.map((profile) => profile.emotional_openness));
   const avgMessagedConflict = mean(messaged.map((profile) => profile.conflict_speed));
   const revealedVision = countBy(messaged.map((profile) => profile.relationship_vision)).map((entry) => entry.value);
+  const lifestyleValues = messaged
+    .map((profile) => profile.lifestyle_energy)
+    .filter((value): value is NonNullable<UserCompatibilityProfile["lifestyle_energy"]> => Boolean(value));
   const revealedLifestyle = countBy(
-    messaged.map((profile) => profile.lifestyle_energy).filter((value): value is string => typeof value === "string")
+    lifestyleValues
   ).map((entry) => entry.value);
 
   const confidence = Math.min(messaged.length / 20, 1);

@@ -75,19 +75,16 @@ export async function GET() {
     }))
   );
 
-  await supabase
-    .from("revealed_preferences")
-    .upsert(
-      {
-        user_id: user.id,
-        learned_weights: computed.learnedWeights,
-        stated_vs_revealed: computed.statedVsRevealed,
-        sample_size: computed.sampleSize,
-        last_updated: computed.lastUpdated
-      },
-      { onConflict: "user_id" }
-    )
-    .catch(() => undefined);
+  await supabase.from("revealed_preferences").upsert(
+    {
+      user_id: user.id,
+      learned_weights: computed.learnedWeights,
+      stated_vs_revealed: computed.statedVsRevealed,
+      sample_size: computed.sampleSize,
+      last_updated: computed.lastUpdated
+    },
+    { onConflict: "user_id" }
+  );
 
   return NextResponse.json({ revealedPreferences: computed }, { status: 200 });
 }

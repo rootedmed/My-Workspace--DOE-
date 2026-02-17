@@ -41,8 +41,7 @@ export async function GET(_request: Request, context: { params: Promise<{ token:
   await supabase
     .from("guest_compatibility_sessions")
     .update({ was_viewed: true, viewed_at: new Date().toISOString() })
-    .eq("id", session.data.id)
-    .catch(() => undefined);
+    .eq("id", session.data.id);
 
   return NextResponse.json(
     {

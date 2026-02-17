@@ -24,8 +24,7 @@ export async function GET(_request: Request, context: { params: Promise<{ token:
   await supabase
     .from("shared_snapshots")
     .update({ views: Number(row.data.views ?? 0) + 1 })
-    .eq("token", params.data.token)
-    .catch(() => undefined);
+    .eq("token", params.data.token);
   return NextResponse.json(
     {
       snapshot: row.data.snapshot_data,
