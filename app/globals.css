@@ -548,6 +548,15 @@ button.ghost,
   line-height: 1.4;
 }
 
+.match-card {
+  cursor: pointer;
+}
+
+.match-card:focus-visible {
+  outline: 3px solid color-mix(in srgb, var(--accent) 50%, #fff 50%);
+  outline-offset: 2px;
+}
+
 .prompt-q {
   font-weight: 700;
 }

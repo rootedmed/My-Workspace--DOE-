@@ -19,8 +19,10 @@ export function MatchesList() {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  async function loadMatches() {
-    setLoading(true);
+  async function loadMatches(background = false) {
+    if (!background) {
+      setLoading(true);
+    }
     setError(null);
     try {
       const response = await fetch("/api/matches/list", { cache: "no-store" });
@@ -32,12 +34,19 @@ export function MatchesList() {
       const payload = (await response.json()) as { matches: MatchItem[] };
       setMatches(payload.matches ?? []);
     } finally {
-      setLoading(false);
+      if (!background) {
+        setLoading(false);
+      }
     }
   }
 
   useEffect(() => {
     void loadMatches();
+    const intervalId = window.setInterval(() => {
+      void loadMatches(true);
+    }, 3000);
+
+    return () => window.clearInterval(intervalId);
   }, []);
 
   return (
@@ -62,7 +71,19 @@ export function MatchesList() {
 
         <div className="stack">
           {matches.map((match) => (
-            <article key={match.id} className="prompt-card">
+            <article
+              key={match.id}
+              className="prompt-card match-card"
+              role="button"
+              tabIndex={0}
+              onClick={() => router.push(`/matches/${match.id}`)}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" || event.key === " ") {
+                  event.preventDefault();
+                  router.push(`/matches/${match.id}`);
+                }
+              }}
+            >
               <div className="match-row">
                 {match.photoUrl ? (
                   // eslint-disable-next-line @next/next/no-img-element
