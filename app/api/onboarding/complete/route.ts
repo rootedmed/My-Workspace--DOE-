@@ -119,44 +119,6 @@ export async function POST(request: Request) {
   };
 
   const supabase = await createServerSupabaseClient();
-  const userProfileRes = await supabase
-    .from("user_profiles")
-    .upsert(
-      {
-        user_id: user.id,
-        past_attribution: parsed.data.past_attribution,
-        conflict_speed: parsed.data.conflict_speed,
-        love_expression: parsed.data.love_expression,
-        support_need: parsed.data.support_need,
-        emotional_openness: parsed.data.emotional_openness,
-        relationship_vision: parsed.data.relationship_vision,
-        relational_strengths: parsed.data.relational_strengths,
-        growth_intention: parsed.data.growth_intention,
-        attachment_axis: attachmentAxis,
-        readiness_score: readinessScore,
-        completed_at: completedAt,
-        updated_at: completedAt
-      },
-      { onConflict: "user_id" }
-    )
-    .select("user_id")
-    .single();
-
-  if (userProfileRes.error) {
-    logStructured("error", "supabase_write", {
-      request_id: requestId,
-      operation: "upsert",
-      table: "user_profiles",
-      user_id: user.id,
-      status: "error",
-      error_code: userProfileRes.error.code ?? null,
-      error_message: userProfileRes.error.message ?? null,
-      error_details: userProfileRes.error.details ?? null
-    });
-    return NextResponse.json({ error: "Could not persist user compatibility profile." }, { status: 500 });
-  }
-
-  // Keep legacy onboarding_profiles write for existing app flows that still read it.
   const upsertRes = await supabase
     .from("onboarding_profiles")
     .upsert(
@@ -220,7 +182,6 @@ export async function POST(request: Request) {
 
   return NextResponse.json(
     {
-      success: true,
       profile: compatibilityProfile,
       progress: progressRes.data
     },
