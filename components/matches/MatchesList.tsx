@@ -37,7 +37,7 @@ export function MatchesList() {
   }, []);
 
   return (
-    <main>
+    <>
       <section className="panel stack">
         <p className="eyebrow">Matches</p>
         <h1>Your mutual matches</h1>
@@ -75,6 +75,6 @@ export function MatchesList() {
           ))}
         </div>
       </section>
-    </main>
+    </>
   );
 }

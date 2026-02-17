@@ -8,7 +8,8 @@ const { redirectMock, getCurrentUserMock, getProfileMock } = vi.hoisted(() => ({
 }));
 
 vi.mock("next/navigation", () => ({
-  redirect: redirectMock
+  redirect: redirectMock,
+  useRouter: () => ({ push: vi.fn() })
 }));
 
 vi.mock("@/lib/auth/session", () => ({

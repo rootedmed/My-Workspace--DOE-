@@ -95,7 +95,7 @@ export function DiscoverFeed() {
   }
 
   return (
-    <main>
+    <>
       <section className="panel stack">
         <p className="eyebrow">Discover</p>
         <h1>Swipe with intention</h1>
@@ -205,6 +205,6 @@ export function DiscoverFeed() {
           </div>
         ) : null}
       </section>
-    </main>
+    </>
   );
 }

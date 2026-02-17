@@ -3,6 +3,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { db } from "@/lib/db/client";
 import type { OnboardingProfile } from "@/lib/domain/types";
+import { BottomTabs } from "@/components/navigation/BottomTabs";
 
 type TraitCard = {
   label: string;
@@ -76,29 +77,36 @@ export default async function ResultsPage() {
   const meaning = getMeaningText(profile);
 
   return (
-    <main>
-      <section className="panel elevated stack">
-        <p className="eyebrow">Dating Style Snapshot</p>
-        <h1>Here&apos;s your relationship style</h1>
-        <p className="muted">A quick read on how you naturally connect.</p>
-      </section>
+    <main className="app-main">
+      <section className="app-shell">
+        <div className="app-screen">
+          <div className="stack">
+            <section className="panel elevated stack">
+              <p className="eyebrow">Dating Style Snapshot</p>
+              <h1>Here&apos;s your relationship style</h1>
+              <p className="muted">A quick read on how you naturally connect.</p>
+            </section>
 
-      <section className="stats-grid" aria-label="Dating style traits">
-        {cards.map((card) => (
-          <article key={card.label} className="metric">
-            <span>{card.label}</span>
-            <strong>{card.value}</strong>
-            <p className="muted small">{card.blurb}</p>
-          </article>
-        ))}
-      </section>
+            <section className="stats-grid" aria-label="Dating style traits">
+              {cards.map((card) => (
+                <article key={card.label} className="metric">
+                  <span>{card.label}</span>
+                  <strong>{card.value}</strong>
+                  <p className="muted small">{card.blurb}</p>
+                </article>
+              ))}
+            </section>
 
-      <section className="panel stack">
-        <h2>What this means</h2>
-        <p className="muted">{meaning}</p>
-        <Link className="button-link" href="/discover">
-          See compatible matches
-        </Link>
+            <section className="panel stack">
+              <h2>What this means</h2>
+              <p className="muted">{meaning}</p>
+              <Link className="button-link" href="/discover">
+                See compatible matches
+              </Link>
+            </section>
+          </div>
+        </div>
+        <BottomTabs />
       </section>
     </main>
   );

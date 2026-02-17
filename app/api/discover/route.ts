@@ -91,18 +91,25 @@ export async function GET(request: Request) {
     return NextResponse.json({ candidates: [], incomingLikes: [], emptyReason: "Finish onboarding to use Discover." }, { status: 200 });
   }
 
-  if (profilesRes.error || mySwipesRes.error || incomingLikesRes.error || mutualRes.error) {
+  if (profilesRes.error) {
+    return NextResponse.json({ error: "Could not load discover candidates." }, { status: 500 });
+  }
+  const swipesTableMissing =
+    mySwipesRes.error?.code === "42P01" || incomingLikesRes.error?.code === "42P01" || mutualRes.error?.code === "42P01";
+  if (!swipesTableMissing && (mySwipesRes.error || incomingLikesRes.error || mutualRes.error)) {
     return NextResponse.json({ error: "Could not load discover candidates." }, { status: 500 });
   }
 
   const currentProfile = toProfile(currentProfileRes.data as Record<string, unknown>);
   const allCandidates = (profilesRes.data ?? []).map((row) => toProfile(row as Record<string, unknown>));
   const swipeMap = new Map(
-    (mySwipesRes.data ?? []).map((row) => [String(row.target_user_id), String(row.decision)])
+    ((mySwipesRes.data ?? []) as Array<{ target_user_id: string; decision: string }>).map((row) => [String(row.target_user_id), String(row.decision)])
   );
-  const incomingLikeIds = new Set((incomingLikesRes.data ?? []).map((row) => String(row.actor_user_id)));
+  const incomingLikeIds = new Set(
+    ((incomingLikesRes.data ?? []) as Array<{ actor_user_id: string }>).map((row) => String(row.actor_user_id))
+  );
   const matchedIds = new Set<string>();
-  for (const row of mutualRes.data ?? []) {
+  for (const row of (mutualRes.data ?? []) as Array<{ user_low: string; user_high: string }>) {
     const low = String(row.user_low);
     const high = String(row.user_high);
     if (low !== user.id) matchedIds.add(low);
@@ -122,7 +129,7 @@ export async function GET(request: Request) {
     ...filtered.filter((candidate) => !incomingLikeIds.has(candidate.id))
   ];
   const candidateIds = prioritized.map((candidate) => candidate.id);
-  const incomingListIds = (incomingLikesRes.data ?? [])
+  const incomingListIds = ((incomingLikesRes.data ?? []) as Array<{ actor_user_id: string }>)
     .map((row) => String(row.actor_user_id))
     .filter((id) => !matchedIds.has(id) && !swipeMap.has(id));
   const allPhotoIds = [...new Set([...candidateIds, ...incomingListIds])];
@@ -245,6 +252,9 @@ export async function POST(request: Request) {
     .select("actor_user_id")
     .single();
   if (swipeRes.error) {
+    if (swipeRes.error.code === "42P01") {
+      return NextResponse.json({ error: "Swipe tables are not migrated yet." }, { status: 503 });
+    }
     return NextResponse.json({ error: "Could not save swipe." }, { status: 500 });
   }
 
@@ -261,6 +271,9 @@ export async function POST(request: Request) {
     .maybeSingle();
 
   if (reciprocalRes.error) {
+    if (reciprocalRes.error.code === "42P01") {
+      return NextResponse.json({ error: "Swipe tables are not migrated yet." }, { status: 503 });
+    }
     return NextResponse.json({ error: "Could not evaluate mutual like." }, { status: 500 });
   }
 
