@@ -152,12 +152,12 @@ export async function GET() {
       .in("user_id", [user.id, ...counterpartIds])
   ]);
 
-  if (
-    profilesRes.error ||
-    photosRes.error
-  ) {
-    return NextResponse.json({ error: "Could not load match details." }, { status: 500 });
-  }
+  const profileDetailsUnavailable =
+    Boolean(profilesRes.error) &&
+    (isPermissionError(profilesRes.error) || isMissingRelationError(profilesRes.error));
+  const photosUnavailable =
+    Boolean(photosRes.error) &&
+    (isPermissionError(photosRes.error) || isMissingRelationError(photosRes.error));
 
   const currentProfileUnavailable =
     isMissingRelationError(currentProfileRes.error) || isPermissionError(currentProfileRes.error);
@@ -173,6 +173,14 @@ export async function GET() {
     (counterpartProfilesRes.error && !counterpartProfilesUnavailable) ||
     (onboardingCompatRes.error && !onboardingCompatUnavailable)
   ) {
+    return NextResponse.json({ error: "Could not load match details." }, { status: 500 });
+  }
+
+  if (profilesRes.error && !profileDetailsUnavailable) {
+    return NextResponse.json({ error: "Could not load match details." }, { status: 500 });
+  }
+
+  if (photosRes.error && !photosUnavailable) {
     return NextResponse.json({ error: "Could not load match details." }, { status: 500 });
   }
 
@@ -212,10 +220,15 @@ export async function GET() {
     string,
     { firstName: string; ageRange: string | null; locationPreference: string | null }
   >(
-    (profilesRes.data ?? []).map((row) => [
+    ((profilesRes.data ?? []) as Array<{
+      user_id: string;
+      first_name: string | null;
+      age_range: string | null;
+      location_preference: string | null;
+    }>).map((row) => [
       String(row.user_id),
       {
-        firstName: String(row.first_name),
+        firstName: row.first_name ? String(row.first_name) : "Match",
         ageRange: typeof row.age_range === "string" ? row.age_range : null,
         locationPreference: typeof row.location_preference === "string" ? row.location_preference : null
       }
@@ -223,7 +236,12 @@ export async function GET() {
   );
   const photoPathById = new Map<string, string>();
   const photoInlineById = new Map<string, string>();
-  for (const row of photosRes.data ?? []) {
+  for (const row of (photosRes.data ?? []) as Array<{
+    user_id: string;
+    storage_path: string | null;
+    mime_type: string | null;
+    image_base64: string | null;
+  }>) {
     const userId = String(row.user_id);
     const path = typeof row.storage_path === "string" ? row.storage_path : "";
     const mimeType = typeof row.mime_type === "string" ? row.mime_type : "image/jpeg";
