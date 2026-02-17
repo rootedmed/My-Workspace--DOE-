@@ -63,7 +63,7 @@ export async function GET(request: Request) {
   const lookingForFilter = url.searchParams.get("lookingFor")?.trim() || "";
   const locationFilter = url.searchParams.get("locationPreference")?.trim() || "";
 
-  const [currentProfileRes, profilesRes, mySwipesRes, incomingLikesRes, mutualRes] = await Promise.all([
+  const [currentProfileRes, profilesRes, mySwipesRes, incomingLikesRes] = await Promise.all([
     supabase
       .from("onboarding_profiles")
       .select("user_id, first_name, age_range, location_preference, intent, tendencies, personality, created_at")
@@ -81,10 +81,6 @@ export async function GET(request: Request) {
       .select("actor_user_id")
       .eq("target_user_id", user.id)
       .eq("decision", "like"),
-    supabase
-      .from("mutual_matches")
-      .select("user_low, user_high")
-      .or(`user_low.eq.${user.id},user_high.eq.${user.id}`)
   ]);
 
   if (currentProfileRes.error || !currentProfileRes.data) {
@@ -104,9 +100,8 @@ export async function GET(request: Request) {
     }
     return NextResponse.json({ error: "Could not load discover candidates." }, { status: 500 });
   }
-  const swipesTableMissing =
-    mySwipesRes.error?.code === "42P01" || incomingLikesRes.error?.code === "42P01" || mutualRes.error?.code === "42P01";
-  if (!swipesTableMissing && (mySwipesRes.error || incomingLikesRes.error || mutualRes.error)) {
+  const swipesTableMissing = mySwipesRes.error?.code === "42P01" || incomingLikesRes.error?.code === "42P01";
+  if (!swipesTableMissing && (mySwipesRes.error || incomingLikesRes.error)) {
     return NextResponse.json({ error: "Could not load discover candidates." }, { status: 500 });
   }
 
@@ -118,17 +113,7 @@ export async function GET(request: Request) {
   const incomingLikeIds = new Set(
     ((incomingLikesRes.data ?? []) as Array<{ actor_user_id: string }>).map((row) => String(row.actor_user_id))
   );
-  const matchedIds = new Set<string>();
-  for (const row of (mutualRes.data ?? []) as Array<{ user_low: string; user_high: string }>) {
-    const low = String(row.user_low);
-    const high = String(row.user_high);
-    if (low !== user.id) matchedIds.add(low);
-    if (high !== user.id) matchedIds.add(high);
-  }
-
   const filtered = allCandidates.filter((candidate) => {
-    if (matchedIds.has(candidate.id)) return false;
-    if (swipeMap.has(candidate.id)) return false;
     if (lookingForFilter && candidate.intent.lookingFor !== lookingForFilter) return false;
     if (locationFilter && candidate.locationPreference !== locationFilter) return false;
     return true;
@@ -141,7 +126,7 @@ export async function GET(request: Request) {
   const candidateIds = prioritized.map((candidate) => candidate.id);
   const incomingListIds = ((incomingLikesRes.data ?? []) as Array<{ actor_user_id: string }>)
     .map((row) => String(row.actor_user_id))
-    .filter((id) => !matchedIds.has(id) && !swipeMap.has(id));
+    .filter((id) => !swipeMap.has(id));
   const allPhotoIds = [...new Set([...candidateIds, ...incomingListIds])];
 
   const photosRes = allPhotoIds.length
