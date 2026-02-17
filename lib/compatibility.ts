@@ -70,6 +70,117 @@ export interface CompatibilityResult {
   warnings: string[];
 }
 
+type VisionMatrix = Record<RelationshipVision, Record<RelationshipVision, number>>;
+type SupportMatrix = Record<SupportNeed, Record<SupportNeed, number>>;
+
+const ATTACHMENT_PENALTIES_BY_GAP = [0, 0, 10, 25, 40] as const;
+const CONFLICT_PENALTIES_BY_GAP = [0, 0, 5, 15, 30] as const;
+
+const VISION_COMPATIBILITY: VisionMatrix = {
+  independent: { independent: 15, adventure: 8, friendship: 4, safe: 0, enmeshed: -20 },
+  enmeshed: { enmeshed: 15, safe: 8, friendship: 4, independent: -20, adventure: -10 },
+  friendship: { friendship: 15, safe: 8, adventure: 8, independent: 4, enmeshed: 4 },
+  safe: { safe: 15, enmeshed: 8, friendship: 8, independent: 0, adventure: -20 },
+  adventure: { adventure: 15, independent: 8, friendship: 8, safe: -20, enmeshed: -10 }
+};
+
+const SUPPORT_PENALTIES: SupportMatrix = {
+  validation: { validation: 0, presence: 0, practical: -15, space: -15, distraction: -5 },
+  practical: { practical: 0, distraction: -5, validation: -15, space: -5, presence: -5 },
+  presence: { presence: 0, validation: 0, space: -15, practical: -5, distraction: -5 },
+  space: { space: 0, distraction: 0, validation: -15, presence: -15, practical: -5 },
+  distraction: { distraction: 0, practical: -5, space: 0, validation: -5, presence: -5 }
+};
+
+function clamp(value: number, min: number, max: number): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function getAttachmentPenalty(opennessGap: number): number {
+  return ATTACHMENT_PENALTIES_BY_GAP[opennessGap as 0 | 1 | 2 | 3 | 4] ?? 40;
+}
+
+function getConflictPenalty(conflictGap: number): number {
+  return CONFLICT_PENALTIES_BY_GAP[conflictGap as 0 | 1 | 2 | 3 | 4] ?? 30;
+}
+
+function getVisionDelta(a: UserCompatibilityProfile, b: UserCompatibilityProfile): number {
+  return VISION_COMPATIBILITY[a.relationship_vision]?.[b.relationship_vision] ?? 0;
+}
+
+function getSupportDelta(a: UserCompatibilityProfile, b: UserCompatibilityProfile): number {
+  return SUPPORT_PENALTIES[a.support_need]?.[b.support_need] ?? 0;
+}
+
+function getSharedExpressionCount(a: UserCompatibilityProfile, b: UserCompatibilityProfile): number {
+  return a.love_expression.filter((value) => b.love_expression.includes(value)).length;
+}
+
+function getExpressionDelta(sharedExpression: number): number {
+  return sharedExpression === 2 ? 10 : sharedExpression === 1 ? 4 : 0;
+}
+
+function getGrowthDelta(
+  a: UserCompatibilityProfile,
+  b: UserCompatibilityProfile,
+  notes: string[]
+): { growthDelta: number; growthScore: number } {
+  let growthDelta = 0;
+
+  if (a.growth_intention === "depth") {
+    if (b.emotional_openness <= 2) growthDelta += 10;
+    if (b.emotional_openness >= 4) growthDelta -= 10;
+  }
+
+  if (a.growth_intention === "balance") {
+    if (b.relationship_vision === "independent" || b.relationship_vision === "adventure") {
+      growthDelta += 8;
+    }
+  }
+
+  if (a.growth_intention === "chosen") {
+    if (
+      b.relational_strengths.includes("consistency") ||
+      b.relational_strengths.includes("loyalty")
+    ) {
+      growthDelta += 8;
+      notes.push("They bring consistency — something you've said matters to you.");
+    }
+    if (b.emotional_openness >= 4) {
+      growthDelta -= 15;
+    }
+  }
+
+  if (a.growth_intention === "peace") {
+    if (a.conflict_speed >= 4 && b.conflict_speed === 1) {
+      growthDelta -= 10;
+    }
+    const conflictGap = Math.abs(a.conflict_speed - b.conflict_speed);
+    if (conflictGap <= 1) {
+      growthDelta += 5;
+    }
+  }
+
+  if (a.growth_intention === "alignment" && a.relationship_vision === b.relationship_vision) {
+    notes.push("Your relationship visions are aligned — that's what you said you needed most.");
+  }
+
+  if (b.relational_strengths.includes("joy") && a.relationship_vision === "safe") growthDelta += 5;
+  if (b.relational_strengths.includes("support") && a.relationship_vision === "adventure") growthDelta += 5;
+  if (b.relational_strengths.includes("honesty") && a.growth_intention === "depth") growthDelta += 5;
+
+  // 0..10 output lane for UI bars.
+  const growthScore = clamp(Math.round(5 + growthDelta / 3), 0, 10);
+  return { growthDelta, growthScore };
+}
+
+function getTier(score: number): CompatibilityResult["tier"] {
+  if (score >= 78) return "strong";
+  if (score >= 60) return "good";
+  if (score >= 42) return "possible";
+  return "low";
+}
+
 export function deriveAttachmentAxis(profile: UserCompatibilityProfile): AttachmentAxis {
   const openness = profile.emotional_openness;
   const conflictSpeed = profile.conflict_speed;
@@ -121,8 +232,9 @@ export function computeCompatibility(a: UserCompatibilityProfile, b: UserCompati
   const warnings: string[] = [];
 
   const opennessGap = Math.abs(a.emotional_openness - b.emotional_openness);
-  const attachmentPenalty = [0, 0, 10, 25, 40][opennessGap] ?? 40;
-  score -= Math.min(attachmentPenalty * 0.75, 30);
+  const attachmentPenalty = getAttachmentPenalty(opennessGap);
+  const appliedAttachmentPenalty = Math.min(attachmentPenalty * 0.75, 30);
+  score -= appliedAttachmentPenalty;
 
   if (opennessGap === 0 || opennessGap === 1) {
     notes.push("You have similar emotional comfort zones.");
@@ -136,8 +248,9 @@ export function computeCompatibility(a: UserCompatibilityProfile, b: UserCompati
   }
 
   const conflictGap = Math.abs(a.conflict_speed - b.conflict_speed);
-  const conflictPenalty = [0, 0, 5, 15, 30][conflictGap] ?? 30;
-  score -= Math.min(conflictPenalty, 25);
+  const conflictPenalty = getConflictPenalty(conflictGap);
+  const appliedConflictPenalty = Math.min(conflictPenalty, 25);
+  score -= appliedConflictPenalty;
 
   if (conflictGap <= 1) {
     notes.push("You process conflict at a similar pace — that makes repair easier.");
@@ -146,15 +259,11 @@ export function computeCompatibility(a: UserCompatibilityProfile, b: UserCompati
     warnings.push("You have different conflict speeds. Name this early so it doesn't feel like rejection.");
   }
 
-  const visionCompatibility: Record<RelationshipVision, Partial<Record<RelationshipVision, number>>> = {
-    independent: { independent: 15, adventure: 8, friendship: 4, safe: 0, enmeshed: -20 },
-    enmeshed: { enmeshed: 15, safe: 8, friendship: 4, independent: -20, adventure: -10 },
-    friendship: { friendship: 15, safe: 8, adventure: 8, independent: 4, enmeshed: 4 },
-    safe: { safe: 15, enmeshed: 8, friendship: 8, independent: 0, adventure: -20 },
-    adventure: { adventure: 15, independent: 8, friendship: 8, safe: -20, enmeshed: -10 }
-  };
-
-  const visionDelta = visionCompatibility[a.relationship_vision]?.[b.relationship_vision] ?? 0;
+  let visionDelta = getVisionDelta(a, b);
+  if (a.growth_intention === "alignment") {
+    // Spec: "alignment" doubles relationship vision weight.
+    visionDelta *= 2;
+  }
   if (visionDelta >= 0) {
     score += Math.min(visionDelta, 15);
   } else {
@@ -166,66 +275,31 @@ export function computeCompatibility(a: UserCompatibilityProfile, b: UserCompati
     notes.push("You both want the same kind of relationship structure.");
   }
 
-  const sharedExpression = a.love_expression.filter((v) => b.love_expression.includes(v)).length;
-  score += sharedExpression === 2 ? 10 : sharedExpression === 1 ? 4 : 0;
+  const sharedExpression = getSharedExpressionCount(a, b);
+  const expressionDelta = getExpressionDelta(sharedExpression);
+  score += expressionDelta;
 
-  const supportPenalties: Record<SupportNeed, Partial<Record<SupportNeed, number>>> = {
-    validation: { validation: 0, presence: 0, practical: -15, space: -15, distraction: -5 },
-    practical: { practical: 0, distraction: -5, validation: -15, space: -5, presence: -5 },
-    presence: { presence: 0, validation: 0, space: -15, practical: -5, distraction: -5 },
-    space: { space: 0, distraction: 0, validation: -15, presence: -15, practical: -5 },
-    distraction: { distraction: 0, practical: -5, space: 0, validation: -5, presence: -5 }
-  };
-
-  const supportDelta = supportPenalties[a.support_need]?.[b.support_need] ?? 0;
+  const supportDelta = getSupportDelta(a, b);
   score += supportDelta;
   if (supportDelta <= -15) {
     warnings.push("You tend to need different things when you're stressed. Worth discussing early.");
   }
 
-  if (a.growth_intention === "depth") {
-    if (b.emotional_openness <= 2) score += 10;
-    if (b.emotional_openness >= 4) score -= 10;
-  }
-  if (a.growth_intention === "chosen") {
-    if (
-      b.relational_strengths.includes("consistency") ||
-      b.relational_strengths.includes("loyalty")
-    ) {
-      score += 8;
-      notes.push("They bring consistency — something you've said matters to you.");
-    }
-    if (b.attachment_axis === "avoidant" || b.attachment_axis === "avoidant_lean") {
-      score -= 15;
-    }
-  }
-  if (a.growth_intention === "alignment") {
-    if (a.relationship_vision === b.relationship_vision) {
-      notes.push("Your relationship visions are aligned — that's what you said you needed most.");
-    }
-  }
-  if (a.growth_intention === "peace") {
-    const conflictRisk = Math.abs(a.conflict_speed - b.conflict_speed);
-    if (conflictRisk >= 3) score -= 10;
-  }
-
-  if (b.relational_strengths.includes("joy") && a.relationship_vision === "safe") score += 5;
-  if (b.relational_strengths.includes("support") && a.relationship_vision === "adventure") score += 5;
-  if (b.relational_strengths.includes("honesty") && a.growth_intention === "depth") score += 5;
+  const { growthDelta, growthScore } = getGrowthDelta(a, b, notes);
+  score += growthDelta;
 
   score = Math.max(0, Math.min(100, Math.round(score)));
-
-  const tier = score >= 78 ? "strong" : score >= 60 ? "good" : score >= 42 ? "possible" : "low";
+  const tier = getTier(score);
 
   return {
     score,
     tier,
     dimensionScores: {
-      attachment: Math.max(0, 30 - Math.min(attachmentPenalty * 0.75, 30)),
-      conflict: Math.max(0, 25 - Math.min(conflictPenalty, 25)),
+      attachment: Math.max(0, 30 - appliedAttachmentPenalty),
+      conflict: Math.max(0, 25 - appliedConflictPenalty),
       vision: Math.max(0, visionDelta >= 0 ? visionDelta : 25 - Math.abs(visionDelta)),
       expression: Math.min(10, sharedExpression * 5),
-      growth: score - (score - 10)
+      growth: growthScore
     },
     notes: notes.slice(0, 3),
     warnings: warnings.slice(0, 2)

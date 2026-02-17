@@ -1,8 +1,85 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import {
+  computeCompatibility,
+  type AttachmentAxis,
+  type ConflictSpeed,
+  type EmotionalOpenness,
+  type GrowthIntention,
+  type LoveExpression,
+  type PastAttribution,
+  type RelationshipVision,
+  type RelationalStrength,
+  type SupportNeed,
+  type UserCompatibilityProfile
+} from "@/lib/compatibility";
 
 const PHOTO_BUCKET = "profile-photos";
+
+type UserProfileRow = {
+  user_id: string;
+  past_attribution: PastAttribution;
+  conflict_speed: ConflictSpeed;
+  love_expression: LoveExpression[];
+  support_need: SupportNeed;
+  emotional_openness: EmotionalOpenness;
+  relationship_vision: RelationshipVision;
+  relational_strengths: RelationalStrength[];
+  growth_intention: GrowthIntention;
+  attachment_axis: AttachmentAxis;
+  readiness_score: number;
+  completed_at: string;
+};
+
+type CompatibilityProfilePayload = {
+  past_attribution: PastAttribution;
+  conflict_speed: ConflictSpeed;
+  love_expression: LoveExpression[];
+  support_need: SupportNeed;
+  emotional_openness: EmotionalOpenness;
+  relationship_vision: RelationshipVision;
+  relational_strengths: RelationalStrength[];
+  growth_intention: GrowthIntention;
+  attachment_axis: AttachmentAxis;
+  readiness_score: number;
+  completedAt?: string;
+  completed_at?: string;
+};
+
+function toCompatibilityProfile(row: UserProfileRow): UserCompatibilityProfile {
+  return {
+    userId: row.user_id,
+    past_attribution: row.past_attribution,
+    conflict_speed: row.conflict_speed,
+    love_expression: row.love_expression,
+    support_need: row.support_need,
+    emotional_openness: row.emotional_openness,
+    relationship_vision: row.relationship_vision,
+    relational_strengths: row.relational_strengths,
+    growth_intention: row.growth_intention,
+    attachment_axis: row.attachment_axis,
+    readiness_score: row.readiness_score,
+    completedAt: new Date(row.completed_at)
+  };
+}
+
+function fromCompatibilityPayload(userId: string, payload: CompatibilityProfilePayload): UserCompatibilityProfile {
+  return {
+    userId,
+    past_attribution: payload.past_attribution,
+    conflict_speed: payload.conflict_speed,
+    love_expression: payload.love_expression,
+    support_need: payload.support_need,
+    emotional_openness: payload.emotional_openness,
+    relationship_vision: payload.relationship_vision,
+    relational_strengths: payload.relational_strengths,
+    growth_intention: payload.growth_intention,
+    attachment_axis: payload.attachment_axis,
+    readiness_score: payload.readiness_score,
+    completedAt: new Date(payload.completed_at ?? payload.completedAt ?? new Date().toISOString())
+  };
+}
 
 export async function GET() {
   const user = await getCurrentUser();
@@ -30,23 +107,77 @@ export async function GET() {
     return NextResponse.json({ matches: [] }, { status: 200 });
   }
 
-  const [profilesRes, photosRes] = await Promise.all([
+  const [profilesRes, photosRes, currentProfileRes, counterpartProfilesRes, onboardingCompatRes] = await Promise.all([
     supabase
       .from("onboarding_profiles")
-      .select("user_id, first_name, age_range, location_preference")
+      .select("user_id, first_name, age_range, location_preference, compatibility_profile")
       .in("user_id", counterpartIds),
     supabase
       .from("user_photos")
       .select("user_id, storage_path, mime_type, image_base64")
       .in("user_id", counterpartIds)
-      .eq("slot", 1)
+      .eq("slot", 1),
+    supabase
+      .from("user_profiles")
+      .select(
+        "user_id, past_attribution, conflict_speed, love_expression, support_need, emotional_openness, relationship_vision, relational_strengths, growth_intention, attachment_axis, readiness_score, completed_at"
+      )
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase
+      .from("user_profiles")
+      .select(
+        "user_id, past_attribution, conflict_speed, love_expression, support_need, emotional_openness, relationship_vision, relational_strengths, growth_intention, attachment_axis, readiness_score, completed_at"
+      ).in("user_id", counterpartIds),
+    supabase
+      .from("onboarding_profiles")
+      .select("user_id, compatibility_profile")
+      .in("user_id", [user.id, ...counterpartIds])
   ]);
 
-  if (profilesRes.error || photosRes.error) {
+  if (
+    profilesRes.error ||
+    photosRes.error ||
+    currentProfileRes.error ||
+    counterpartProfilesRes.error ||
+    onboardingCompatRes.error
+  ) {
     return NextResponse.json({ error: "Could not load match details." }, { status: 500 });
   }
+  const onboardingCompatById = new Map<string, CompatibilityProfilePayload>();
+  for (const row of onboardingCompatRes.data ?? []) {
+    const payload = row.compatibility_profile as CompatibilityProfilePayload | null;
+    if (payload && typeof payload === "object") {
+      onboardingCompatById.set(String(row.user_id), payload);
+    }
+  }
 
-  const profileById = new Map(
+  const currentProfile =
+    (currentProfileRes.data ? toCompatibilityProfile(currentProfileRes.data as UserProfileRow) : null) ??
+    (onboardingCompatById.has(user.id)
+      ? fromCompatibilityPayload(user.id, onboardingCompatById.get(user.id) as CompatibilityProfilePayload)
+      : null);
+
+  if (!currentProfile) {
+    return NextResponse.json({ error: "Current user profile not found." }, { status: 400 });
+  }
+
+  const counterpartProfileById = new Map<string, UserCompatibilityProfile>();
+  for (const row of (counterpartProfilesRes.data ?? []) as UserProfileRow[]) {
+    counterpartProfileById.set(String(row.user_id), toCompatibilityProfile(row));
+  }
+  for (const counterpartId of counterpartIds) {
+    if (counterpartProfileById.has(counterpartId)) continue;
+    const payload = onboardingCompatById.get(counterpartId);
+    if (payload) {
+      counterpartProfileById.set(counterpartId, fromCompatibilityPayload(counterpartId, payload));
+    }
+  }
+
+  const profileById = new Map<
+    string,
+    { firstName: string; ageRange: string | null; locationPreference: string | null }
+  >(
     (profilesRes.data ?? []).map((row) => [
       String(row.user_id),
       {
@@ -86,6 +217,8 @@ export async function GET() {
   const matches = rawMatches.map((row) => {
     const counterpartId = String(row.user_low) === user.id ? String(row.user_high) : String(row.user_low);
     const profile = profileById.get(counterpartId);
+    const counterpartProfile = counterpartProfileById.get(counterpartId);
+    const compatibility = counterpartProfile ? computeCompatibility(currentProfile, counterpartProfile) : null;
     return {
       id: String(row.id),
       counterpartId,
@@ -93,8 +226,15 @@ export async function GET() {
       counterpartAgeRange: profile?.ageRange ?? null,
       counterpartLocationPreference: profile?.locationPreference ?? null,
       photoUrl: photoUrlById.get(counterpartId) ?? photoInlineById.get(counterpartId) ?? null,
-      createdAt: String(row.created_at)
+      createdAt: String(row.created_at),
+      compatibility
     };
+  });
+
+  matches.sort((a, b) => {
+    const aScore = a.compatibility?.score ?? 0;
+    const bScore = b.compatibility?.score ?? 0;
+    return bScore - aScore;
   });
 
   return NextResponse.json({ matches }, { status: 200 });
