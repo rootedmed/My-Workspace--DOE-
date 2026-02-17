@@ -6,6 +6,7 @@ import { AnimatePresence, motion } from "framer-motion";
 import type { OnboardingProfile, UserPhoto } from "@/lib/domain/types";
 import { withCsrfHeaders } from "@/components/auth/csrf";
 import { useRouter } from "next/navigation";
+import { DiscoverFeed } from "@/components/discover/DiscoverFeed";
 
 type WizardMode = "deep";
 type AppTab = "home" | "results" | "discover" | "matches" | "me";
@@ -194,13 +195,6 @@ function getFieldValue(values: WizardValues, field: string): string {
   return (values[field as keyof WizardValues] as string | undefined) ?? "";
 }
 
-function toLabel(value: string): string {
-  return value
-    .split("_")
-    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
-    .join(" ");
-}
-
 function likertFromScore(score: number): string {
   const mapped = Math.round(score / 20);
   return String(Math.min(5, Math.max(1, mapped || 3)));
@@ -255,8 +249,6 @@ export function OnboardingFlow({ userId, firstName, initialTab = "home" }: Onboa
   const [uploadingSlot, setUploadingSlot] = useState<number | null>(null);
   const [photoError, setPhotoError] = useState<string | null>(null);
   const [discoverCandidates, setDiscoverCandidates] = useState<DiscoverCandidate[]>([]);
-  const [discoverError, setDiscoverError] = useState<string | null>(null);
-  const [discoverEmptyReason, setDiscoverEmptyReason] = useState<string | null>(null);
 
   const totalSteps = questions.length;
   const currentQuestion = questions[Math.min(questionIndex, totalSteps - 1)] ?? questions[0]!;
@@ -271,7 +263,6 @@ export function OnboardingFlow({ userId, firstName, initialTab = "home" }: Onboa
   const hydrate = useCallback(async () => {
     setLoadingProgress(true);
     setOnboardingError(null);
-    setDiscoverError(null);
 
     try {
       const [progressRes, profileRes, photosRes, discoverRes] = await Promise.all([
@@ -313,7 +304,6 @@ export function OnboardingFlow({ userId, firstName, initialTab = "home" }: Onboa
       if (discoverRes.ok) {
         const discoverPayload = (await discoverRes.json()) as DiscoverResponse;
         setDiscoverCandidates(discoverPayload.candidates ?? []);
-        setDiscoverEmptyReason(discoverPayload.emptyReason ?? null);
       }
     } catch (cause) {
       console.error("onboarding_hydrate_failed", cause);
@@ -510,20 +500,6 @@ export function OnboardingFlow({ userId, firstName, initialTab = "home" }: Onboa
     const data = (await response.json()) as MatchResponse;
     setMatches(data.matches ?? []);
     setMatchesEmptyReason((data.matches ?? []).length === 0 ? "No matches yet." : null);
-  }
-
-  async function loadDiscover() {
-    setDiscoverError(null);
-    const response = await fetch("/api/discover", { cache: "no-store" });
-    if (!response.ok) {
-      setDiscoverCandidates([]);
-      setDiscoverError("Could not load Discover.");
-      setDiscoverEmptyReason("Could not load Discover.");
-      return;
-    }
-    const payload = (await response.json()) as DiscoverResponse;
-    setDiscoverCandidates(payload.candidates ?? []);
-    setDiscoverEmptyReason(payload.emptyReason ?? null);
   }
 
   async function uploadPhoto(slot: number, file: File) {
@@ -730,25 +706,16 @@ export function OnboardingFlow({ userId, firstName, initialTab = "home" }: Onboa
 
           {tab === "discover" ? (
             <div className="stack">
-              {!onboardingCompleted ? <section className="panel panel-tight"><p className="muted">Finish setup first to get accurate discovery.</p><div className="actions"><button type="button" onClick={() => setTab("home")}>Finish setup</button></div></section> : null}
-
-              <section className="panel">
-                <h3>Discover pool</h3>
-                <p className="muted">Every completed profile appears here in V1.</p>
-                <div className="actions">
-                  <button type="button" className="ghost" onClick={loadDiscover}>Refresh Discover</button>
-                </div>
-                {discoverError ? <p role="alert" className="inline-error">{discoverError}</p> : null}
-                {discoverCandidates.length === 0 ? <p className="muted">{discoverEmptyReason ?? "No candidates yet."}</p> : null}
-                <div className="stack">
-                  {discoverCandidates.map((candidate) => (
-                    <article key={candidate.id} className="prompt-card">
-                      <strong>{candidate.firstName}</strong>
-                      <p className="muted">{toLabel(candidate.ageRange)} · {toLabel(candidate.locationPreference)}</p>
-                    </article>
-                  ))}
-                </div>
-              </section>
+              {!onboardingCompleted ? (
+                <section className="panel panel-tight">
+                  <p className="muted">Finish setup first to get accurate discovery.</p>
+                  <div className="actions">
+                    <button type="button" onClick={() => setTab("home")}>Finish setup</button>
+                  </div>
+                </section>
+              ) : (
+                <DiscoverFeed />
+              )}
             </div>
           ) : null}
 
