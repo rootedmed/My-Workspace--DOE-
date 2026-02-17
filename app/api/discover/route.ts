@@ -92,6 +92,16 @@ export async function GET(request: Request) {
   }
 
   if (profilesRes.error) {
+    if (profilesRes.error.code === "42501") {
+      return NextResponse.json(
+        {
+          candidates: [],
+          incomingLikes: [],
+          emptyReason: "Discover is blocked until DB migration 008 is applied."
+        },
+        { status: 200 }
+      );
+    }
     return NextResponse.json({ error: "Could not load discover candidates." }, { status: 500 });
   }
   const swipesTableMissing =
