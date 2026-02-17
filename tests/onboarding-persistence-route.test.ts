@@ -1,7 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
-import type { OnboardingProfile } from "@/lib/domain/types";
 
-let savedProfile: OnboardingProfile | null = null;
+let savedRow: {
+  compatibility_profile: Record<string, unknown> | null;
+  attachment_axis: string | null;
+  readiness_score: number | null;
+  completed_at: string | null;
+} | null = null;
 
 vi.mock("@/lib/auth/session", () => ({
   getCurrentUser: vi.fn(async () => ({
@@ -19,48 +23,68 @@ vi.mock("@/lib/auth/ensureAppUser", () => ({
   ensureAppUser: vi.fn(async () => undefined)
 }));
 
+vi.mock("@/lib/config/env.server", () => ({
+  assertWriteAllowed: vi.fn(() => undefined)
+}));
+
+vi.mock("@/lib/security/rateLimit", () => ({
+  applyRateLimit: vi.fn(() => ({ allowed: true, retryAfterSeconds: 0 })),
+  getRequestIp: vi.fn(() => "127.0.0.1")
+}));
+
 vi.mock("@/lib/db/client", () => ({
-  db: {
-    saveProfile: vi.fn(async (_userId: string, input: Omit<OnboardingProfile, "id" | "createdAt">) => {
-      savedProfile = {
-        id: "user-1",
-        createdAt: new Date().toISOString(),
-        ...input
-      };
-      return savedProfile;
-    }),
-    getProfile: vi.fn(async () => savedProfile)
-  }
+  db: {}
+}));
+
+vi.mock("@/lib/supabase/server", () => ({
+  createServerSupabaseClient: vi.fn(async () => ({
+    from: (table: string) => ({
+      upsert: (payload: Record<string, unknown>) => ({
+        select: () => ({
+          single: async () => {
+            if (table === "onboarding_profiles") {
+              savedRow = {
+                compatibility_profile: (payload.compatibility_profile as Record<string, unknown>) ?? null,
+                attachment_axis: typeof payload.attachment_axis === "string" ? payload.attachment_axis : null,
+                readiness_score: typeof payload.readiness_score === "number" ? payload.readiness_score : null,
+                completed_at: typeof payload.completed_at === "string" ? payload.completed_at : null
+              };
+              return { data: { user_id: "user-1" }, error: null };
+            }
+            return {
+              data: { current_step: 8, completed: true, total_steps: 8, mode: "deep" },
+              error: null
+            };
+          }
+        })
+      }),
+      select: () => ({
+        eq: () => ({
+          maybeSingle: async () => ({ data: savedRow, error: null })
+        })
+      })
+    })
+  }))
 }));
 
 import { POST } from "@/app/api/onboarding/complete/route";
 import { GET } from "@/app/api/onboarding/profile/route";
 
 describe("onboarding persistence flow", () => {
-  it("saves then reads onboarding profile", async () => {
+  it("saves then reads v2 onboarding profile", async () => {
     const saveResponse = await POST(
       new Request("http://localhost/api/onboarding/complete", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
-          firstName: "Maya",
-          ageRange: "31_37",
-          locationPreference: "same_city",
-          lookingFor: "marriage_minded",
-          timelineMonths: 18,
-          readiness: 4,
-          weeklyCapacity: 2,
-          attachment: { anxiety: [3, 4, 3], avoidance: [2, 3, 2] },
-          conflict: { startupSoftness: 4, repairAfterConflict: 4 },
-          regulation: { calmUnderStress: 3, pauseBeforeReacting: 4 },
-          personality: {
-            openness: 4,
-            conscientiousness: 4,
-            extraversion: 3,
-            agreeableness: 4,
-            emotionalStability: 3
-          },
-          noveltyPreference: 3
+          past_attribution: "conflict_comm",
+          conflict_speed: 3,
+          love_expression: ["time", "words"],
+          support_need: "validation",
+          emotional_openness: 2,
+          relationship_vision: "friendship",
+          relational_strengths: ["consistency", "honesty"],
+          growth_intention: "alignment"
         })
       })
     );
@@ -71,6 +95,8 @@ describe("onboarding persistence flow", () => {
     const payload = await readResponse.json();
 
     expect(readResponse.status).toBe(200);
-    expect(payload.profile.firstName).toBe("Maya");
+    expect(payload.compatibilityProfile.growth_intention).toBe("alignment");
+    expect(payload.attachmentAxis).toBeTruthy();
+    expect(typeof payload.readinessScore).toBe("number");
   });
 });
