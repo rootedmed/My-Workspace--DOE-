@@ -1,8 +1,8 @@
 import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { BottomTabs } from "@/components/navigation/BottomTabs";
+import { getOnboardingV2State } from "@/lib/onboarding/v2";
 
 export default async function MePage() {
   const user = await getCurrentUser();
@@ -10,15 +10,8 @@ export default async function MePage() {
     redirect("/login");
   }
 
-  const supabase = await createServerSupabaseClient();
-  const { data } = await supabase
-    .from("onboarding_profiles")
-    .select("compatibility_profile, completed_at")
-    .eq("user_id", user.id)
-    .maybeSingle();
-
-  const profile = (data?.compatibility_profile ?? null) as Record<string, unknown> | null;
-  const hasProfile = Boolean(profile);
+  const onboarding = await getOnboardingV2State(user.id);
+  const hasProfile = onboarding.hasProfile;
 
   return (
     <main className="app-main">
@@ -46,10 +39,14 @@ export default async function MePage() {
 
           {hasProfile ? (
             <section className="panel stack">
-              <h2>Saved answers</h2>
-              <pre className="prompt-card tiny" style={{ whiteSpace: "pre-wrap" }}>
-                {JSON.stringify(profile, null, 2)}
-              </pre>
+              <h2>Compatibility profile</h2>
+              <div className="prompt-card">
+                <p className="muted tiny">Attachment axis: {onboarding.attachmentAxis ?? "Not set"}</p>
+                <p className="muted tiny">Readiness score: {onboarding.readinessScore ?? "N/A"}</p>
+                <p className="muted tiny">
+                  Completed: {onboarding.completedAt ? new Date(onboarding.completedAt).toLocaleString() : "Unknown"}
+                </p>
+              </div>
             </section>
           ) : null}
         </div>

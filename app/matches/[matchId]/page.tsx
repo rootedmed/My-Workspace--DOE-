@@ -2,7 +2,7 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { BottomTabs } from "@/components/navigation/BottomTabs";
 import { MatchChat } from "@/components/matches/MatchChat";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { getOnboardingV2State } from "@/lib/onboarding/v2";
 
 type PageProps = {
   params: Promise<{ matchId: string }>;
@@ -14,13 +14,8 @@ export default async function MatchChatPage({ params }: PageProps) {
     redirect("/login");
   }
 
-  const supabase = await createServerSupabaseClient();
-  const { data } = await supabase
-    .from("onboarding_profiles")
-    .select("compatibility_profile")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!data?.compatibility_profile) {
+  const onboarding = await getOnboardingV2State(user.id);
+  if (!onboarding.hasProfile) {
     redirect("/onboarding");
   }
 

@@ -2,7 +2,7 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { redirect } from "next/navigation";
 import { DiscoverFeed } from "@/components/discover/DiscoverFeed";
 import { BottomTabs } from "@/components/navigation/BottomTabs";
-import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { getOnboardingV2State } from "@/lib/onboarding/v2";
 
 export default async function DiscoverPage() {
   const user = await getCurrentUser();
@@ -10,13 +10,8 @@ export default async function DiscoverPage() {
     redirect("/login");
   }
 
-  const supabase = await createServerSupabaseClient();
-  const { data } = await supabase
-    .from("onboarding_profiles")
-    .select("compatibility_profile")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (!data?.compatibility_profile) {
+  const onboarding = await getOnboardingV2State(user.id);
+  if (!onboarding.hasProfile) {
     redirect("/onboarding");
   }
 

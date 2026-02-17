@@ -829,7 +829,7 @@ export function OnboardingFlow({
       }
 
       onComplete?.(completedProfile);
-      router.push("/matches");
+      router.push("/results");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not complete onboarding.");
     } finally {
