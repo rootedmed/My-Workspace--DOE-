@@ -14,25 +14,6 @@ create table if not exists onboarding_drafts (
   updated_at timestamptz not null default now()
 );
 
--- Pair code based deterministic discovery for two-user testing
-create table if not exists pair_codes (
-  code text primary key,
-  owner_user_id uuid not null references app_users(id) on delete cascade,
-  status text not null default 'active' check (status in ('active', 'used', 'revoked')),
-  created_at timestamptz not null default now(),
-  used_by_user_id uuid references app_users(id) on delete set null,
-  used_at timestamptz
-);
-
-create table if not exists pair_links (
-  id uuid primary key default gen_random_uuid(),
-  user_low uuid not null references app_users(id) on delete cascade,
-  user_high uuid not null references app_users(id) on delete cascade,
-  created_at timestamptz not null default now(),
-  check (user_low <> user_high),
-  unique(user_low, user_high)
-);
-
 -- Conversations + messages + guided decision track state per conversation
 create table if not exists conversations (
   id uuid primary key default gen_random_uuid(),
@@ -68,16 +49,11 @@ alter table if exists user_photos
   add column if not exists storage_path text;
 
 -- Helpful indexes
-create index if not exists idx_pair_codes_owner on pair_codes(owner_user_id, status);
-create index if not exists idx_pair_links_low on pair_links(user_low);
-create index if not exists idx_pair_links_high on pair_links(user_high);
 create index if not exists idx_messages_conversation_created on messages(conversation_id, created_at asc);
 
 -- Enable RLS for new tables
 alter table if exists onboarding_progress enable row level security;
 alter table if exists onboarding_drafts enable row level security;
-alter table if exists pair_codes enable row level security;
-alter table if exists pair_links enable row level security;
 alter table if exists conversations enable row level security;
 alter table if exists messages enable row level security;
 alter table if exists conversation_decision_tracks enable row level security;
@@ -125,34 +101,6 @@ drop policy if exists onboarding_drafts_delete_own on onboarding_drafts;
 create policy onboarding_drafts_delete_own on onboarding_drafts
 for delete to authenticated
 using (user_id = auth.uid());
-
--- pair_codes policies
- drop policy if exists pair_codes_select_participant on pair_codes;
-create policy pair_codes_select_participant on pair_codes
-for select to authenticated
-using (owner_user_id = auth.uid() or used_by_user_id = auth.uid());
-
-drop policy if exists pair_codes_insert_owner on pair_codes;
-create policy pair_codes_insert_owner on pair_codes
-for insert to authenticated
-with check (owner_user_id = auth.uid());
-
-drop policy if exists pair_codes_update_participant on pair_codes;
-create policy pair_codes_update_participant on pair_codes
-for update to authenticated
-using (owner_user_id = auth.uid() or used_by_user_id = auth.uid())
-with check (owner_user_id = auth.uid() or used_by_user_id = auth.uid());
-
--- pair_links policies
- drop policy if exists pair_links_select_member on pair_links;
-create policy pair_links_select_member on pair_links
-for select to authenticated
-using (user_low = auth.uid() or user_high = auth.uid());
-
-drop policy if exists pair_links_insert_member on pair_links;
-create policy pair_links_insert_member on pair_links
-for insert to authenticated
-with check (user_low = auth.uid() or user_high = auth.uid());
 
 -- conversations policies
  drop policy if exists conversations_select_member on conversations;
@@ -239,8 +187,6 @@ with check (
 -- Grants for authenticated role
 grant select, insert, update, delete on table public.onboarding_progress to authenticated;
 grant select, insert, update, delete on table public.onboarding_drafts to authenticated;
-grant select, insert, update on table public.pair_codes to authenticated;
-grant select, insert on table public.pair_links to authenticated;
 grant select, insert, update on table public.conversations to authenticated;
 grant select, insert on table public.messages to authenticated;
 grant select, insert, update on table public.conversation_decision_tracks to authenticated;

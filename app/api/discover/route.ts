@@ -9,31 +9,12 @@ export async function GET() {
   }
 
   const supabase = await createServerSupabaseClient();
-  const links = await supabase
-    .from("pair_links")
-    .select("user_low, user_high")
-    .or(`user_low.eq.${user.id},user_high.eq.${user.id}`);
-
-  if (links.error) {
-    return NextResponse.json({ error: "Could not load discover candidates." }, { status: 500 });
-  }
-
-  const candidateIds = new Set<string>();
-  for (const link of links.data ?? []) {
-    const low = String(link.user_low);
-    const high = String(link.user_high);
-    if (low !== user.id) candidateIds.add(low);
-    if (high !== user.id) candidateIds.add(high);
-  }
-
-  if (candidateIds.size === 0) {
-    return NextResponse.json({ candidates: [], emptyReason: "No candidates yet. Invite a friend." }, { status: 200 });
-  }
-
   const profiles = await supabase
     .from("onboarding_profiles")
     .select("user_id, first_name, age_range, location_preference, intent, tendencies, personality, created_at")
-    .in("user_id", [...candidateIds]);
+    .neq("user_id", user.id)
+    .order("created_at", { ascending: false })
+    .limit(200);
 
   if (profiles.error) {
     return NextResponse.json({ error: "Could not load candidate profiles." }, { status: 500 });
@@ -49,6 +30,10 @@ export async function GET() {
     personality: row.personality,
     createdAt: String(row.created_at)
   }));
+
+  if (candidates.length === 0) {
+    return NextResponse.json({ candidates: [], emptyReason: "No candidates available yet." }, { status: 200 });
+  }
 
   return NextResponse.json({ candidates, emptyReason: null }, { status: 200 });
 }

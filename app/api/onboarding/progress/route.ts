@@ -71,10 +71,11 @@ export async function POST(request: Request) {
     | { currentStep?: number; completed?: boolean; totalSteps?: number; mode?: "fast" | "deep" }
     | null;
 
-  const currentStep = Math.max(1, Number(payload?.currentStep ?? 1));
+  const requestedCurrentStep = Math.max(1, Number(payload?.currentStep ?? 1));
   const totalSteps = Math.max(1, Number(payload?.totalSteps ?? 3));
   const mode = payload?.mode === "deep" ? "deep" : "fast";
   const completed = Boolean(payload?.completed);
+  const currentStep = completed ? totalSteps : Math.min(requestedCurrentStep, totalSteps);
 
   const supabase = await createServerSupabaseClient();
   const upsertRes = await supabase

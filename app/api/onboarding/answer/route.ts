@@ -42,7 +42,7 @@ export async function POST(request: Request) {
   }
 
   const currentStep = Math.max(1, Number(payload?.currentStep ?? 1));
-  const nextStep = Math.max(currentStep, Number(payload?.nextStep ?? currentStep));
+  const requestedNextStep = Math.max(currentStep, Number(payload?.nextStep ?? currentStep));
   const totalSteps = Math.max(1, Number(payload?.totalSteps ?? 3));
   const mode = payload?.mode === "deep" ? "deep" : "fast";
 
@@ -56,14 +56,40 @@ export async function POST(request: Request) {
     question_id: questionId
   });
 
-  const existing = await supabase.from("onboarding_drafts").select("answers").eq("user_id", user.id).maybeSingle();
-  if (existing.error) {
-    const err = pickSupabaseError(existing.error);
+  const [existingDraft, existingProgress] = await Promise.all([
+    supabase.from("onboarding_drafts").select("answers").eq("user_id", user.id).maybeSingle(),
+    supabase.from("onboarding_progress").select("current_step").eq("user_id", user.id).maybeSingle()
+  ]);
+
+  if (existingDraft.error || existingProgress.error) {
+    const err = pickSupabaseError(existingDraft.error ?? existingProgress.error);
     return NextResponse.json({ error: "Could not read onboarding draft.", details: err }, { status: 500 });
   }
 
+  const persistedStep = Number(existingProgress.data?.current_step ?? 1);
+  const expectedStep = Math.max(1, Math.min(totalSteps, Number.isFinite(persistedStep) ? persistedStep : 1));
+  if (currentStep !== expectedStep) {
+    logStructured("error", "onboarding_event", {
+      request_id: requestId,
+      event_type: "step_conflict",
+      user_id: user.id,
+      expected_step: expectedStep,
+      received_step: currentStep,
+      question_id: questionId
+    });
+    return NextResponse.json(
+      {
+        error: "Step conflict. Reload and continue from your saved step.",
+        expectedStep
+      },
+      { status: 409 }
+    );
+  }
+
+  const nextStep = Math.min(totalSteps, Math.max(expectedStep, requestedNextStep, expectedStep + 1));
+
   const answers = {
-    ...((existing.data?.answers as Record<string, unknown> | null) ?? {}),
+    ...((existingDraft.data?.answers as Record<string, unknown> | null) ?? {}),
     [questionId]: value
   };
 
@@ -79,7 +105,7 @@ export async function POST(request: Request) {
         {
           user_id: user.id,
           current_step: nextStep,
-          completed: nextStep > totalSteps,
+          completed: false,
           total_steps: totalSteps,
           mode,
           updated_at: new Date().toISOString()
