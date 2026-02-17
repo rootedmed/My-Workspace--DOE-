@@ -400,6 +400,9 @@ button.ghost,
   display: grid;
   grid-template-columns: repeat(4, 1fr);
   gap: var(--space-2);
+  width: 100%;
+  margin: 0 auto;
+  align-self: center;
   padding: var(--space-2);
   border-radius: 18px;
   border: 1px solid var(--line);
@@ -413,10 +416,12 @@ button.ghost,
   border: 0;
   border-radius: 14px;
   min-height: 46px;
+  min-width: 0;
+  padding: 0.2rem 0.35rem;
   background: transparent;
   color: var(--muted);
   font-weight: 700;
-  font-size: var(--text-sm);
+  font-size: 0.78rem;
   box-shadow: none;
 }
 
@@ -640,6 +645,33 @@ button.ghost,
   background: var(--surface-alt);
   color: var(--text);
   font-weight: 700;
+}
+
+.chat-list {
+  display: grid;
+  gap: var(--space-2);
+  max-height: 360px;
+  overflow-y: auto;
+  padding-right: var(--space-1);
+}
+
+.chat-bubble {
+  border-radius: var(--radius-md);
+  border: 1px solid var(--line);
+  padding: var(--space-3);
+  display: grid;
+  gap: var(--space-2);
+  max-width: 86%;
+}
+
+.chat-bubble.mine {
+  margin-left: auto;
+  background: color-mix(in srgb, var(--accent) 12%, #fff 88%);
+}
+
+.chat-bubble.theirs {
+  margin-right: auto;
+  background: var(--surface-alt);
 }
 
 @media (max-width: 720px) {

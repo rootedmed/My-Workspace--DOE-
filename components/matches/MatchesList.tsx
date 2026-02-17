@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import { useRouter } from "next/navigation";
 
 type MatchItem = {
   id: string;
@@ -13,6 +14,7 @@ type MatchItem = {
 };
 
 export function MatchesList() {
+  const router = useRouter();
   const [matches, setMatches] = useState<MatchItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -77,6 +79,9 @@ export function MatchesList() {
                   ) : null}
                   <p className="muted tiny">Matched on {new Date(match.createdAt).toLocaleDateString()}</p>
                 </div>
+              </div>
+              <div className="actions">
+                <button type="button" onClick={() => router.push(`/matches/${match.id}`)}>Open chat</button>
               </div>
             </article>
           ))}
