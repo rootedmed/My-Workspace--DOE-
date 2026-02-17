@@ -23,7 +23,7 @@ export async function POST(request: Request) {
   const payload = (await request.json().catch(() => null)) as
     | {
         questionId?: string;
-        value?: string | number;
+        value?: string | number | string[];
         nextStep?: number;
         currentStep?: number;
         totalSteps?: number;
@@ -37,14 +37,15 @@ export async function POST(request: Request) {
   }
 
   const value = payload?.value;
-  if (typeof value !== "string" && typeof value !== "number") {
+  const isArrayValue = Array.isArray(value) && value.every((item) => typeof item === "string");
+  if (typeof value !== "string" && typeof value !== "number" && !isArrayValue) {
     return NextResponse.json({ error: "Answer value is required." }, { status: 400 });
   }
 
   const currentStep = Math.max(1, Number(payload?.currentStep ?? 1));
   const requestedNextStep = Math.max(currentStep, Number(payload?.nextStep ?? currentStep));
-  const totalSteps = Math.max(1, Number(payload?.totalSteps ?? 3));
-  const mode = payload?.mode === "deep" ? "deep" : "fast";
+  const totalSteps = Math.max(1, Number(payload?.totalSteps ?? 8));
+  const mode = payload?.mode === "deep" ? "deep" : "deep";
 
   const supabase = await createServerSupabaseClient();
 

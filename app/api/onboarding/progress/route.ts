@@ -43,8 +43,8 @@ export async function GET(request: Request) {
       progress: progressRes.data ?? {
         current_step: 1,
         completed: false,
-        total_steps: 3,
-        mode: "fast",
+        total_steps: 8,
+        mode: "deep",
         updated_at: new Date().toISOString()
       },
       draft: draftRes.data?.answers ?? {}
@@ -72,8 +72,8 @@ export async function POST(request: Request) {
     | null;
 
   const requestedCurrentStep = Math.max(1, Number(payload?.currentStep ?? 1));
-  const totalSteps = Math.max(1, Number(payload?.totalSteps ?? 3));
-  const mode = payload?.mode === "deep" ? "deep" : "fast";
+  const totalSteps = Math.max(1, Number(payload?.totalSteps ?? 8));
+  const mode = payload?.mode === "deep" ? "deep" : "deep";
   const completed = Boolean(payload?.completed);
   const currentStep = completed ? totalSteps : Math.min(requestedCurrentStep, totalSteps);
 

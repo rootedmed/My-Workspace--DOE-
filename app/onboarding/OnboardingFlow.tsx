@@ -1,7 +1,8 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import { withCsrfHeaders } from "@/components/auth/csrf";
 import {
   deriveAttachmentAxis,
   deriveReadinessScore,
@@ -48,6 +49,16 @@ type OnboardingAnswers = {
   relationship_vision?: RelationshipVision;
   relational_strengths?: RelationalStrength[];
   growth_intention?: GrowthIntention;
+};
+
+type ProgressResponse = {
+  progress: {
+    current_step: number;
+    completed: boolean;
+    total_steps: number;
+    mode: "deep";
+  };
+  draft: Partial<OnboardingAnswers>;
 };
 
 const questions: Array<QuestionDef<string | number>> = [
@@ -651,6 +662,9 @@ export function OnboardingFlow({
   const [currentQ, setCurrentQ] = useState(0);
   const [answers, setAnswers] = useState<OnboardingAnswers>({});
   const [done, setDone] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
 
   const q = questions[currentQ]!;
 
@@ -700,23 +714,152 @@ export function OnboardingFlow({
     };
   }, [answers, userId]);
 
+  useEffect(() => {
+    let cancelled = false;
+
+    async function hydrate() {
+      setLoading(true);
+      setError(null);
+      const response = await fetch("/api/onboarding/progress", { cache: "no-store" });
+      if (!response.ok) {
+        if (!cancelled) {
+          setError("Could not load onboarding progress.");
+          setLoading(false);
+        }
+        return;
+      }
+
+      const payload = (await response.json()) as ProgressResponse;
+      if (cancelled) return;
+
+      const draft = payload.draft ?? {};
+      setAnswers({
+        past_attribution: draft.past_attribution as PastAttribution | undefined,
+        conflict_speed: draft.conflict_speed as ConflictSpeed | undefined,
+        love_expression: draft.love_expression as LoveExpression[] | undefined,
+        support_need: draft.support_need as SupportNeed | undefined,
+        emotional_openness: draft.emotional_openness as EmotionalOpenness | undefined,
+        relationship_vision: draft.relationship_vision as RelationshipVision | undefined,
+        relational_strengths: draft.relational_strengths as RelationalStrength[] | undefined,
+        growth_intention: draft.growth_intention as GrowthIntention | undefined
+      });
+      setCurrentQ(Math.max(0, Math.min((payload.progress.current_step ?? 1) - 1, questions.length - 1)));
+      setDone(Boolean(payload.progress.completed));
+      setLoading(false);
+    }
+
+    void hydrate();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   function handleAnswer(value: string | number | string[]) {
     setAnswers((prev) => ({ ...prev, [q.id]: value }));
   }
 
-  function goNext() {
-    if (!readyForNext) return;
-    if (currentQ < questions.length - 1) {
-      setCurrentQ((prev) => prev + 1);
-      return;
+  async function persistStep(nextStep: number, value: string | number | string[]) {
+    const response = await fetch("/api/onboarding/answer", {
+      method: "POST",
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        questionId: q.id,
+        value,
+        currentStep: currentQ + 1,
+        nextStep,
+        totalSteps: questions.length,
+        mode: "deep"
+      })
+    });
+
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      throw new Error(payload?.error ?? "Could not save answer.");
     }
-    setDone(true);
   }
 
-  function goBack() {
-    if (currentQ > 0) {
-      setCurrentQ((prev) => prev - 1);
+  async function goNext() {
+    if (!readyForNext) return;
+    const value = answers[q.id];
+    if (value === undefined) return;
+
+    setSaving(true);
+    setError(null);
+
+    try {
+      const nextStep = Math.min(questions.length, currentQ + 2);
+      await persistStep(nextStep, value as string | number | string[]);
+
+      if (currentQ < questions.length - 1) {
+        setCurrentQ((prev) => prev + 1);
+      } else {
+        setDone(true);
+      }
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not save answer.");
+    } finally {
+      setSaving(false);
     }
+  }
+
+  async function completeOnboarding() {
+    if (!completedProfile || saving) return;
+
+    setSaving(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/onboarding/complete", {
+        method: "POST",
+        headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          past_attribution: completedProfile.past_attribution,
+          conflict_speed: completedProfile.conflict_speed,
+          love_expression: completedProfile.love_expression,
+          support_need: completedProfile.support_need,
+          emotional_openness: completedProfile.emotional_openness,
+          relationship_vision: completedProfile.relationship_vision,
+          relational_strengths: completedProfile.relational_strengths,
+          growth_intention: completedProfile.growth_intention
+        })
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Could not complete onboarding.");
+      }
+
+      onComplete?.(completedProfile);
+      router.push("/matches");
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not complete onboarding.");
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  async function goBack() {
+    if (currentQ > 0) {
+      const previousStep = currentQ;
+      setCurrentQ((prev) => prev - 1);
+      await fetch("/api/onboarding/progress", {
+        method: "POST",
+        headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          currentStep: previousStep,
+          totalSteps: questions.length,
+          mode: "deep",
+          completed: false
+        })
+      }).catch(() => undefined);
+    }
+  }
+
+  if (loading) {
+    return (
+      <div style={{ minHeight: "100vh", background: "#0f0e0e", display: "grid", placeItems: "center", color: "#fff" }}>
+        Loading onboarding...
+      </div>
+    );
   }
 
   if (done && completedProfile) {
@@ -724,8 +867,7 @@ export function OnboardingFlow({
       <SummaryScreen
         profile={completedProfile}
         onContinue={() => {
-          onComplete?.(completedProfile);
-          router.push("/matches");
+          void completeOnboarding();
         }}
       />
     );
@@ -828,6 +970,11 @@ export function OnboardingFlow({
             ) : null}
 
             <InsightBubble text={q.insight} />
+            {error ? (
+              <p style={{ marginTop: "14px", color: "#ffb0b0", fontFamily: "'DM Sans', sans-serif", fontSize: "12px" }}>
+                {error}
+              </p>
+            ) : null}
           </div>
 
           <div
@@ -842,8 +989,8 @@ export function OnboardingFlow({
           >
             <button
               type="button"
-              onClick={goBack}
-              disabled={currentQ === 0}
+              onClick={() => void goBack()}
+              disabled={currentQ === 0 || saving}
               style={{
                 background: "transparent",
                 border: "1px solid rgba(255,255,255,0.12)",
@@ -861,8 +1008,8 @@ export function OnboardingFlow({
 
             <button
               type="button"
-              onClick={goNext}
-              disabled={!readyForNext}
+              onClick={() => void goNext()}
+              disabled={!readyForNext || saving}
               style={{
                 background: readyForNext
                   ? `linear-gradient(135deg, ${q.dimensionColor}, ${q.dimensionColor}cc)`
@@ -879,7 +1026,7 @@ export function OnboardingFlow({
                 boxShadow: readyForNext ? `0 4px 20px ${q.dimensionColor}40` : "none"
               }}
             >
-              {currentQ === questions.length - 1 ? "See my matches" : "Continue"}
+              {saving ? "Saving..." : currentQ === questions.length - 1 ? "See my matches" : "Continue"}
             </button>
           </div>
         </div>
