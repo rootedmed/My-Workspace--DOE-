@@ -50,9 +50,9 @@ type ProgressResponse = {
   draft: Partial<OnboardingAnswers>;
 };
 
-const profileQuestions: Array<OnboardingQuestionDef<ProfileQuestionId>> = onboardingQuestions.filter(
-  (question): question is OnboardingQuestionDef<ProfileQuestionId> => question.id !== "lifestyle_energy"
-);
+const profileQuestions = onboardingQuestions.filter(
+  (question) => question.id !== "lifestyle_energy"
+) as Array<OnboardingQuestionDef<ProfileQuestionId>>;
 
 function hasAnswer(answer: OnboardingAnswers[keyof OnboardingAnswers] | undefined): boolean {
   if (Array.isArray(answer)) {
