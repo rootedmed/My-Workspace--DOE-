@@ -60,6 +60,10 @@ function isMissingColumnError(error: SupabaseErrorLike | null | undefined): bool
   return error?.code === "42703";
 }
 
+function isPermissionError(error: SupabaseErrorLike | null | undefined): boolean {
+  return error?.code === "42501";
+}
+
 function toCompatibilityProfile(row: UserProfileRow): UserCompatibilityProfile {
   return {
     userId: row.user_id,
@@ -150,15 +154,28 @@ export async function GET() {
 
   if (
     profilesRes.error ||
-    photosRes.error ||
-    (currentProfileRes.error && !isMissingRelationError(currentProfileRes.error)) ||
-    (counterpartProfilesRes.error && !isMissingRelationError(counterpartProfilesRes.error)) ||
-    (onboardingCompatRes.error &&
-      !isMissingRelationError(onboardingCompatRes.error) &&
-      !isMissingColumnError(onboardingCompatRes.error))
+    photosRes.error
   ) {
     return NextResponse.json({ error: "Could not load match details." }, { status: 500 });
   }
+
+  const currentProfileUnavailable =
+    isMissingRelationError(currentProfileRes.error) || isPermissionError(currentProfileRes.error);
+  const counterpartProfilesUnavailable =
+    isMissingRelationError(counterpartProfilesRes.error) || isPermissionError(counterpartProfilesRes.error);
+  const onboardingCompatUnavailable =
+    isMissingRelationError(onboardingCompatRes.error) ||
+    isMissingColumnError(onboardingCompatRes.error) ||
+    isPermissionError(onboardingCompatRes.error);
+
+  if (
+    (currentProfileRes.error && !currentProfileUnavailable) ||
+    (counterpartProfilesRes.error && !counterpartProfilesUnavailable) ||
+    (onboardingCompatRes.error && !onboardingCompatUnavailable)
+  ) {
+    return NextResponse.json({ error: "Could not load match details." }, { status: 500 });
+  }
+
   const onboardingCompatById = new Map<string, CompatibilityProfilePayload>();
   if (!onboardingCompatRes.error) {
     for (const row of onboardingCompatRes.data ?? []) {
