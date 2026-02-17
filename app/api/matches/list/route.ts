@@ -47,6 +47,19 @@ type CompatibilityProfilePayload = {
   completed_at?: string;
 };
 
+type SupabaseErrorLike = {
+  code?: string | null;
+  message?: string | null;
+};
+
+function isMissingRelationError(error: SupabaseErrorLike | null | undefined): boolean {
+  return error?.code === "42P01";
+}
+
+function isMissingColumnError(error: SupabaseErrorLike | null | undefined): boolean {
+  return error?.code === "42703";
+}
+
 function toCompatibilityProfile(row: UserProfileRow): UserCompatibilityProfile {
   return {
     userId: row.user_id,
@@ -110,7 +123,7 @@ export async function GET() {
   const [profilesRes, photosRes, currentProfileRes, counterpartProfilesRes, onboardingCompatRes] = await Promise.all([
     supabase
       .from("onboarding_profiles")
-      .select("user_id, first_name, age_range, location_preference, compatibility_profile")
+      .select("user_id, first_name, age_range, location_preference")
       .in("user_id", counterpartIds),
     supabase
       .from("user_photos")
@@ -138,33 +151,37 @@ export async function GET() {
   if (
     profilesRes.error ||
     photosRes.error ||
-    currentProfileRes.error ||
-    counterpartProfilesRes.error ||
-    onboardingCompatRes.error
+    (currentProfileRes.error && !isMissingRelationError(currentProfileRes.error)) ||
+    (counterpartProfilesRes.error && !isMissingRelationError(counterpartProfilesRes.error)) ||
+    (onboardingCompatRes.error &&
+      !isMissingRelationError(onboardingCompatRes.error) &&
+      !isMissingColumnError(onboardingCompatRes.error))
   ) {
     return NextResponse.json({ error: "Could not load match details." }, { status: 500 });
   }
   const onboardingCompatById = new Map<string, CompatibilityProfilePayload>();
-  for (const row of onboardingCompatRes.data ?? []) {
-    const payload = row.compatibility_profile as CompatibilityProfilePayload | null;
-    if (payload && typeof payload === "object") {
-      onboardingCompatById.set(String(row.user_id), payload);
+  if (!onboardingCompatRes.error) {
+    for (const row of onboardingCompatRes.data ?? []) {
+      const payload = row.compatibility_profile as CompatibilityProfilePayload | null;
+      if (payload && typeof payload === "object") {
+        onboardingCompatById.set(String(row.user_id), payload);
+      }
     }
   }
 
   const currentProfile =
-    (currentProfileRes.data ? toCompatibilityProfile(currentProfileRes.data as UserProfileRow) : null) ??
+    (!currentProfileRes.error && currentProfileRes.data
+      ? toCompatibilityProfile(currentProfileRes.data as UserProfileRow)
+      : null) ??
     (onboardingCompatById.has(user.id)
       ? fromCompatibilityPayload(user.id, onboardingCompatById.get(user.id) as CompatibilityProfilePayload)
       : null);
 
-  if (!currentProfile) {
-    return NextResponse.json({ error: "Current user profile not found." }, { status: 400 });
-  }
-
   const counterpartProfileById = new Map<string, UserCompatibilityProfile>();
-  for (const row of (counterpartProfilesRes.data ?? []) as UserProfileRow[]) {
-    counterpartProfileById.set(String(row.user_id), toCompatibilityProfile(row));
+  if (!counterpartProfilesRes.error) {
+    for (const row of (counterpartProfilesRes.data ?? []) as UserProfileRow[]) {
+      counterpartProfileById.set(String(row.user_id), toCompatibilityProfile(row));
+    }
   }
   for (const counterpartId of counterpartIds) {
     if (counterpartProfileById.has(counterpartId)) continue;
@@ -218,7 +235,7 @@ export async function GET() {
     const counterpartId = String(row.user_low) === user.id ? String(row.user_high) : String(row.user_low);
     const profile = profileById.get(counterpartId);
     const counterpartProfile = counterpartProfileById.get(counterpartId);
-    const compatibility = counterpartProfile ? computeCompatibility(currentProfile, counterpartProfile) : null;
+    const compatibility = currentProfile && counterpartProfile ? computeCompatibility(currentProfile, counterpartProfile) : null;
     return {
       id: String(row.id),
       counterpartId,
