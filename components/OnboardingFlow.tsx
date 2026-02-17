@@ -489,7 +489,7 @@ export function OnboardingFlow({ userId, firstName, initialTab = "home" }: Onboa
     }
   }, [canContinue, loading, isSubmittingAnswer, values, totalSteps, persistCurrentAnswer, firstName, mode, router]);
 
-  async function loadMatches() {
+  const loadMatches = useCallback(async () => {
     setMatchesError(null);
     const response = await fetch("/api/matches/list", { cache: "no-store" });
     if (!response.ok) {
@@ -500,7 +500,20 @@ export function OnboardingFlow({ userId, firstName, initialTab = "home" }: Onboa
     const data = (await response.json()) as MatchResponse;
     setMatches(data.matches ?? []);
     setMatchesEmptyReason((data.matches ?? []).length === 0 ? "No matches yet." : null);
-  }
+  }, []);
+
+  useEffect(() => {
+    if (tab !== "matches" || !onboardingCompleted) {
+      return;
+    }
+
+    void loadMatches();
+    const intervalId = window.setInterval(() => {
+      void loadMatches();
+    }, 3000);
+
+    return () => window.clearInterval(intervalId);
+  }, [tab, onboardingCompleted, loadMatches]);
 
   async function uploadPhoto(slot: number, file: File) {
     setPhotoError(null);
@@ -733,7 +746,19 @@ export function OnboardingFlow({ userId, firstName, initialTab = "home" }: Onboa
               </section>
 
               {matches.map((match) => (
-                <section key={match.id} className="panel">
+                <section
+                  key={match.id}
+                  className="panel match-card"
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => router.push(`/matches/${match.id}`)}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter" || event.key === " ") {
+                      event.preventDefault();
+                      router.push(`/matches/${match.id}`);
+                    }
+                  }}
+                >
                   <article className="match-row">
                     {match.photoUrl ? (
                       // eslint-disable-next-line @next/next/no-img-element
@@ -746,6 +771,9 @@ export function OnboardingFlow({ userId, firstName, initialTab = "home" }: Onboa
                       <p className="muted tiny">Mutual match</p>
                     </div>
                   </article>
+                  <div className="actions">
+                    <button type="button" onClick={() => router.push(`/matches/${match.id}`)}>Open chat</button>
+                  </div>
                 </section>
               ))}
             </div>
