@@ -147,7 +147,7 @@ export async function GET(request: Request) {
   const photosRes = allPhotoIds.length
     ? await supabase
         .from("user_photos")
-        .select("user_id, storage_path")
+        .select("user_id, storage_path, mime_type, image_base64")
         .in("user_id", allPhotoIds)
         .eq("slot", 1)
     : { data: [], error: null };
@@ -157,8 +157,17 @@ export async function GET(request: Request) {
   }
 
   const photoPathByUser = new Map<string, string>();
+  const photoInlineByUser = new Map<string, string>();
   for (const row of photosRes.data ?? []) {
-    photoPathByUser.set(String(row.user_id), String(row.storage_path));
+    const userId = String(row.user_id);
+    const path = typeof row.storage_path === "string" ? row.storage_path : "";
+    const mimeType = typeof row.mime_type === "string" ? row.mime_type : "image/jpeg";
+    const imageBase64 = typeof row.image_base64 === "string" ? row.image_base64 : "";
+    if (path) {
+      photoPathByUser.set(userId, path);
+    } else if (imageBase64) {
+      photoInlineByUser.set(userId, `data:${mimeType};base64,${imageBase64}`);
+    }
   }
 
   const signedUrlByUser = new Map<string, string>();
@@ -180,7 +189,7 @@ export async function GET(request: Request) {
       firstName: candidate.firstName,
       ageRange: candidate.ageRange,
       locationPreference: candidate.locationPreference,
-      photoUrl: signedUrlByUser.get(candidate.id) ?? null,
+      photoUrl: signedUrlByUser.get(candidate.id) ?? photoInlineByUser.get(candidate.id) ?? null,
       compatibilityHighlight: insight.highlight,
       watchForInsight: insight.watchFor,
       likedYou: incomingLikeIds.has(candidate.id)
@@ -292,17 +301,35 @@ export async function POST(request: Request) {
   }
 
   const [low, high] = [user.id, candidateId].sort();
-  const matchRes = await supabase
+  const existingMatchRes = await supabase
     .from("mutual_matches")
-    .upsert({ user_low: low, user_high: high }, { onConflict: "user_low,user_high" })
     .select("id")
-    .single();
-  if (matchRes.error || !matchRes.data) {
+    .eq("user_low", low)
+    .eq("user_high", high)
+    .maybeSingle();
+  if (existingMatchRes.error) {
+    return NextResponse.json({ error: "Could not create match." }, { status: 500 });
+  }
+
+  const createdMatchRes = existingMatchRes.data
+    ? existingMatchRes
+    : await supabase
+        .from("mutual_matches")
+        .insert({ user_low: low, user_high: high })
+        .select("id")
+        .single();
+
+  if (createdMatchRes.error || !createdMatchRes.data) {
     return NextResponse.json({ error: "Could not create match." }, { status: 500 });
   }
 
   return NextResponse.json(
-    { matched: true, matchId: String(matchRes.data.id), candidateId, candidateFirstName: String(candidateRes.data.first_name) },
+    {
+      matched: true,
+      matchId: String(createdMatchRes.data.id),
+      candidateId,
+      candidateFirstName: String(candidateRes.data.first_name)
+    },
     { status: 200 }
   );
 }
