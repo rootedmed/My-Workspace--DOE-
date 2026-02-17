@@ -6,6 +6,8 @@ type MatchItem = {
   id: string;
   counterpartId: string;
   counterpartFirstName: string;
+  counterpartAgeRange: string | null;
+  counterpartLocationPreference: string | null;
   photoUrl: string | null;
   createdAt: string;
 };
@@ -68,6 +70,11 @@ export function MatchesList() {
                 )}
                 <div>
                   <h3>{match.counterpartFirstName}</h3>
+                  {match.counterpartAgeRange || match.counterpartLocationPreference ? (
+                    <p className="muted tiny">
+                      {[match.counterpartAgeRange?.replace("_", "-"), match.counterpartLocationPreference?.replace("_", " ")].filter(Boolean).join(" · ")}
+                    </p>
+                  ) : null}
                   <p className="muted tiny">Matched on {new Date(match.createdAt).toLocaleDateString()}</p>
                 </div>
               </div>

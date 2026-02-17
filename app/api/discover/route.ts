@@ -150,7 +150,8 @@ export async function GET(request: Request) {
     const imageBase64 = typeof row.image_base64 === "string" ? row.image_base64 : "";
     if (path) {
       photoPathByUser.set(userId, path);
-    } else if (imageBase64) {
+    }
+    if (imageBase64) {
       photoInlineByUser.set(userId, `data:${mimeType};base64,${imageBase64}`);
     }
   }

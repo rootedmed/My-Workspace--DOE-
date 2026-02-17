@@ -787,6 +787,9 @@ export function OnboardingFlow({ userId, firstName, initialTab = "home" }: Onboa
               <section className="panel">
                 <h3>Photos</h3>
                 <p className="muted">Upload, replace, and manage up to 6 photos.</p>
+                <div className="actions">
+                  <button type="button" className="ghost" onClick={() => router.push("/me/photos")}>Open photo manager</button>
+                </div>
                 <div className="photo-grid" aria-label="Profile photo placeholders">
                   {Array.from({ length: 6 }).map((_, index) => {
                     const slot = index + 1;

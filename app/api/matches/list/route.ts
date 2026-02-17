@@ -33,11 +33,11 @@ export async function GET() {
   const [profilesRes, photosRes] = await Promise.all([
     supabase
       .from("onboarding_profiles")
-      .select("user_id, first_name")
+      .select("user_id, first_name, age_range, location_preference")
       .in("user_id", counterpartIds),
     supabase
       .from("user_photos")
-      .select("user_id, storage_path")
+      .select("user_id, storage_path, mime_type, image_base64")
       .in("user_id", counterpartIds)
       .eq("slot", 1)
   ]);
@@ -46,13 +46,35 @@ export async function GET() {
     return NextResponse.json({ error: "Could not load match details." }, { status: 500 });
   }
 
-  const profileById = new Map((profilesRes.data ?? []).map((row) => [String(row.user_id), String(row.first_name)]));
-  const photoById = new Map((photosRes.data ?? []).map((row) => [String(row.user_id), String(row.storage_path)]));
+  const profileById = new Map(
+    (profilesRes.data ?? []).map((row) => [
+      String(row.user_id),
+      {
+        firstName: String(row.first_name),
+        ageRange: typeof row.age_range === "string" ? row.age_range : null,
+        locationPreference: typeof row.location_preference === "string" ? row.location_preference : null
+      }
+    ])
+  );
+  const photoPathById = new Map<string, string>();
+  const photoInlineById = new Map<string, string>();
+  for (const row of photosRes.data ?? []) {
+    const userId = String(row.user_id);
+    const path = typeof row.storage_path === "string" ? row.storage_path : "";
+    const mimeType = typeof row.mime_type === "string" ? row.mime_type : "image/jpeg";
+    const imageBase64 = typeof row.image_base64 === "string" ? row.image_base64 : "";
+    if (path) {
+      photoPathById.set(userId, path);
+    }
+    if (imageBase64) {
+      photoInlineById.set(userId, `data:${mimeType};base64,${imageBase64}`);
+    }
+  }
   const photoUrlById = new Map<string, string>();
 
   await Promise.all(
     counterpartIds.map(async (id) => {
-      const path = photoById.get(id);
+      const path = photoPathById.get(id);
       if (!path) return;
       const signed = await supabase.storage.from(PHOTO_BUCKET).createSignedUrl(path, 60 * 60);
       if (!signed.error && signed.data?.signedUrl) {
@@ -63,11 +85,14 @@ export async function GET() {
 
   const matches = rawMatches.map((row) => {
     const counterpartId = String(row.user_low) === user.id ? String(row.user_high) : String(row.user_low);
+    const profile = profileById.get(counterpartId);
     return {
       id: String(row.id),
       counterpartId,
-      counterpartFirstName: profileById.get(counterpartId) ?? "Match",
-      photoUrl: photoUrlById.get(counterpartId) ?? null,
+      counterpartFirstName: profile?.firstName ?? "Match",
+      counterpartAgeRange: profile?.ageRange ?? null,
+      counterpartLocationPreference: profile?.locationPreference ?? null,
+      photoUrl: photoUrlById.get(counterpartId) ?? photoInlineById.get(counterpartId) ?? null,
       createdAt: String(row.created_at)
     };
   });
