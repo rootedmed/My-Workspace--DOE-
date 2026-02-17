@@ -39,6 +39,7 @@ export default async function ProtectedAppPage() {
             <div className="actions">
               <Link href="/results" className="button-link ghost">View Results</Link>
               <Link href="/me" className="button-link ghost">Open Me</Link>
+              <Link href="/guest" className="button-link ghost">Guest Compatibility</Link>
             </div>
           </section>
         </div>

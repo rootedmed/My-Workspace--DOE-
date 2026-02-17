@@ -25,12 +25,31 @@ type ThreadResponse = {
   messages: ChatMessage[];
 };
 
+type CheckInResponse = {
+  enabled: boolean;
+  myOptIn: boolean;
+  checkIn: {
+    monthNumber: number;
+    yourResponses: { connection: number; conflictHandling: number; growth: number } | null;
+    partnerResponses: { connection: number; conflictHandling: number; growth: number } | null;
+    coachingScript: string | null;
+  } | null;
+};
+
 export function MatchChat({ matchId, currentUserId }: { matchId: string; currentUserId: string }) {
   const [thread, setThread] = useState<ThreadResponse | null>(null);
   const [draft, setDraft] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [checkIn, setCheckIn] = useState<CheckInResponse | null>(null);
+  const [checkInSubmitting, setCheckInSubmitting] = useState(false);
+  const [checkInAnswers, setCheckInAnswers] = useState({
+    connection: 3,
+    conflictHandling: 3,
+    growth: 3
+  });
+  const [snapshotUrl, setSnapshotUrl] = useState<string | null>(null);
 
   const loadThread = useCallback(async () => {
     try {
@@ -55,6 +74,24 @@ export function MatchChat({ matchId, currentUserId }: { matchId: string; current
     }, 3000);
     return () => window.clearInterval(intervalId);
   }, [loadThread]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadCheckIn() {
+      const response = await fetch(`/api/matches/${matchId}/check-ins`, { cache: "no-store" });
+      if (!response.ok) {
+        return;
+      }
+      const payload = (await response.json()) as CheckInResponse;
+      if (!cancelled) {
+        setCheckIn(payload);
+      }
+    }
+    void loadCheckIn();
+    return () => {
+      cancelled = true;
+    };
+  }, [matchId]);
 
   const canSend = useMemo(() => draft.trim().length > 0 && !sending, [draft, sending]);
 
@@ -82,6 +119,59 @@ export function MatchChat({ matchId, currentUserId }: { matchId: string; current
     } finally {
       setSending(false);
     }
+  }
+
+  async function setOptIn(optIn: boolean) {
+    const response = await fetch(`/api/matches/${matchId}/check-ins/opt-in`, {
+      method: "POST",
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ optIn })
+    });
+    if (!response.ok) {
+      return;
+    }
+    const refresh = await fetch(`/api/matches/${matchId}/check-ins`, { cache: "no-store" });
+    if (refresh.ok) {
+      setCheckIn((await refresh.json()) as CheckInResponse);
+    }
+  }
+
+  async function submitCheckIn() {
+    if (checkInSubmitting) return;
+    setCheckInSubmitting(true);
+    try {
+      const response = await fetch(`/api/matches/${matchId}/check-ins`, {
+        method: "POST",
+        headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({ responses: checkInAnswers })
+      });
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        setError(payload?.error ?? "Could not submit check-in.");
+        return;
+      }
+      const refresh = await fetch(`/api/matches/${matchId}/check-ins`, { cache: "no-store" });
+      if (refresh.ok) {
+        setCheckIn((await refresh.json()) as CheckInResponse);
+      }
+    } finally {
+      setCheckInSubmitting(false);
+    }
+  }
+
+  async function createSnapshot() {
+    const response = await fetch("/api/snapshot/create", {
+      method: "POST",
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({ matchId })
+    });
+    if (!response.ok) {
+      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+      setError(payload?.error ?? "Could not create snapshot.");
+      return;
+    }
+    const payload = (await response.json()) as { path: string };
+    setSnapshotUrl(`${window.location.origin}${payload.path}`);
   }
 
   return (
@@ -141,6 +231,91 @@ export function MatchChat({ matchId, currentUserId }: { matchId: string; current
             {sending ? "Sending..." : "Send"}
           </button>
         </div>
+      </section>
+
+      <section className="panel stack">
+        <h2>Relationship check-ins</h2>
+        <p className="muted small">
+          Monthly 3-question check-ins help you catch drift early. Both of you need to opt in.
+        </p>
+        {!checkIn?.myOptIn ? (
+          <div className="actions">
+            <button type="button" onClick={() => void setOptIn(true)}>Opt in to check-ins</button>
+          </div>
+        ) : (
+          <p className="inline-ok">You opted in.</p>
+        )}
+        {!checkIn?.enabled ? <p className="muted tiny">Waiting for your match to opt in.</p> : null}
+
+        {checkIn?.enabled ? (
+          <>
+            <label>
+              Connection
+              <input
+                className="range-input"
+                type="range"
+                min={1}
+                max={5}
+                step={1}
+                value={checkInAnswers.connection}
+                onChange={(event) =>
+                  setCheckInAnswers((prev) => ({ ...prev, connection: Number(event.target.value) }))
+                }
+              />
+            </label>
+            <label>
+              Conflict handling
+              <input
+                className="range-input"
+                type="range"
+                min={1}
+                max={5}
+                step={1}
+                value={checkInAnswers.conflictHandling}
+                onChange={(event) =>
+                  setCheckInAnswers((prev) => ({ ...prev, conflictHandling: Number(event.target.value) }))
+                }
+              />
+            </label>
+            <label>
+              Growth direction
+              <input
+                className="range-input"
+                type="range"
+                min={1}
+                max={5}
+                step={1}
+                value={checkInAnswers.growth}
+                onChange={(event) =>
+                  setCheckInAnswers((prev) => ({ ...prev, growth: Number(event.target.value) }))
+                }
+              />
+            </label>
+            <div className="actions">
+              <button type="button" onClick={() => void submitCheckIn()} disabled={checkInSubmitting}>
+                {checkInSubmitting ? "Submitting..." : "Submit monthly check-in"}
+              </button>
+            </div>
+          </>
+        ) : null}
+
+        {checkIn?.checkIn?.coachingScript ? (
+          <article className="prompt-card">
+            <p className="small"><strong>Suggested check-in script</strong></p>
+            <p className="muted small">{checkIn.checkIn.coachingScript}</p>
+          </article>
+        ) : null}
+      </section>
+
+      <section className="panel stack">
+        <h2>Get advice on this match</h2>
+        <p className="muted small">
+          Create a redacted compatibility snapshot you can share for feedback.
+        </p>
+        <div className="actions">
+          <button type="button" onClick={() => void createSnapshot()}>Create advice snapshot</button>
+        </div>
+        {snapshotUrl ? <p className="muted tiny">{snapshotUrl}</p> : null}
       </section>
     </div>
   );

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth/session";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { isValidCsrf } from "@/lib/security/csrf";
+import { recordMatchView, recordMessageOutcome } from "@/lib/matching/outcomes";
 
 const paramsSchema = z.object({
   matchId: z.string().uuid()
@@ -45,6 +46,11 @@ export async function GET(_request: Request, context: { params: Promise<{ matchI
   }
 
   const counterpartId = String(match.user_low) === user.id ? String(match.user_high) : String(match.user_low);
+  await recordMatchView(supabase, {
+    matchId: parsedParams.data.matchId,
+    userId: user.id,
+    matchedUserId: counterpartId
+  }).catch(() => undefined);
   const [messagesRes, profileRes, photoRes] = await Promise.all([
     supabase
       .from("match_messages")
@@ -128,6 +134,7 @@ export async function POST(request: Request, context: { params: Promise<{ matchI
   if (!match) {
     return NextResponse.json({ error: "Match not found." }, { status: 404 });
   }
+  const counterpartId = String(match.user_low) === user.id ? String(match.user_high) : String(match.user_low);
 
   const insertRes = await supabase
     .from("match_messages")
@@ -142,6 +149,12 @@ export async function POST(request: Request, context: { params: Promise<{ matchI
   if (insertRes.error || !insertRes.data) {
     return NextResponse.json({ error: "Could not send message." }, { status: 500 });
   }
+
+  await recordMessageOutcome(supabase, {
+    matchId: parsedParams.data.matchId,
+    senderId: user.id,
+    recipientId: counterpartId
+  }).catch(() => undefined);
 
   return NextResponse.json(
     {

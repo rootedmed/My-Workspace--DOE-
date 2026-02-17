@@ -561,6 +561,24 @@ button.ghost,
   font-weight: 700;
 }
 
+.match-insight {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  padding: var(--space-3);
+  background: #fff;
+}
+
+.match-insight summary {
+  cursor: pointer;
+  font-weight: 700;
+  font-size: var(--text-sm);
+}
+
+.match-insight-challenge {
+  border-left: 2px solid color-mix(in srgb, var(--accent) 45%, #fff 55%);
+  padding-left: var(--space-3);
+}
+
 .stats-grid {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -583,6 +601,59 @@ button.ghost,
 
 .metric strong {
   font-size: 1.06rem;
+}
+
+.results-dna {
+  border-radius: var(--radius-lg);
+  padding: var(--space-8) var(--space-5);
+  display: grid;
+  gap: var(--space-5);
+  color: #f9f2e7;
+  background:
+    radial-gradient(circle at 0% 0%, rgba(255, 255, 255, 0.24), transparent 35%),
+    linear-gradient(150deg, #213246 0%, #8b4e42 44%, #d39e64 100%);
+  border: 1px solid rgba(255, 255, 255, 0.26);
+  box-shadow: 0 26px 36px rgba(43, 28, 21, 0.28);
+}
+
+.results-eyebrow {
+  color: rgba(255, 246, 231, 0.85);
+}
+
+.results-title {
+  font-size: 1.4rem;
+  color: #fffaf0;
+}
+
+.results-dna-grid {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.results-dna-row {
+  display: grid;
+  gap: 0.15rem;
+}
+
+.results-dna-row span {
+  text-transform: uppercase;
+  letter-spacing: 0.09em;
+  font-size: 0.68rem;
+  color: rgba(255, 242, 226, 0.7);
+}
+
+.results-dna-row strong {
+  font-size: 1.14rem;
+  line-height: 1.3;
+  color: #fff5e7;
+}
+
+.results-watermark {
+  margin-top: var(--space-5);
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: rgba(255, 243, 226, 0.5);
 }
 
 .swipe-stack {

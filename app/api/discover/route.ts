@@ -5,6 +5,19 @@ import type { OnboardingProfile } from "@/lib/domain/types";
 import { scoreCompatibility } from "@/lib/matching/compatibility";
 import { isValidCsrf } from "@/lib/security/csrf";
 import { ensureAppUser } from "@/lib/auth/ensureAppUser";
+import {
+  generateIncompatibilityReport,
+  type CompatibilityProfileForReport,
+  type IncompatibilityReport
+} from "@/lib/matching/incompatibilityReport";
+import { ensureMatchOutcomeRows } from "@/lib/matching/outcomes";
+import { toCompatibilityProfileFromRow } from "@/lib/matching/profileParser";
+import {
+  DEFAULT_USER_MATCH_WEIGHTS,
+  scoreWithLearning,
+  type RevealedPreferencesRecord,
+  type UserMatchWeights
+} from "@/lib/matching/revealedPreferences";
 
 const PHOTO_BUCKET = "profile-photos";
 
@@ -17,6 +30,7 @@ type CandidatePayload = {
   compatibilityHighlight: string;
   watchForInsight: string;
   likedYou: boolean;
+  understandingMatch: IncompatibilityReport | null;
 };
 
 const scoreLabel: Record<string, string> = {
@@ -38,6 +52,21 @@ function toProfile(row: Record<string, unknown>): OnboardingProfile {
     tendencies: row.tendencies as OnboardingProfile["tendencies"],
     personality: row.personality as OnboardingProfile["personality"],
     createdAt: String(row.created_at)
+  };
+}
+
+function toCompatibilityProfileForReport(row: Record<string, unknown>): CompatibilityProfileForReport | null {
+  const profile = row.compatibility_profile;
+  if (!profile || typeof profile !== "object" || Array.isArray(profile)) {
+    return null;
+  }
+  const asRecord = profile as Record<string, unknown>;
+  return {
+    conflict_speed: typeof asRecord.conflict_speed === "number" ? asRecord.conflict_speed : undefined,
+    emotional_openness: typeof asRecord.emotional_openness === "number" ? asRecord.emotional_openness : undefined,
+    support_need: typeof asRecord.support_need === "string" ? asRecord.support_need : undefined,
+    relationship_vision:
+      typeof asRecord.relationship_vision === "string" ? asRecord.relationship_vision : undefined
   };
 }
 
@@ -63,15 +92,19 @@ export async function GET(request: Request) {
   const lookingForFilter = url.searchParams.get("lookingFor")?.trim() || "";
   const locationFilter = url.searchParams.get("locationPreference")?.trim() || "";
 
-  const [currentProfileRes, profilesRes, mySwipesRes, incomingLikesRes] = await Promise.all([
+  const [currentProfileRes, profilesRes, mySwipesRes, incomingLikesRes, revealedPrefsRes, weightsRes] = await Promise.all([
     supabase
       .from("onboarding_profiles")
-      .select("user_id, first_name, age_range, location_preference, intent, tendencies, personality, created_at")
+      .select(
+        "user_id, first_name, age_range, location_preference, intent, tendencies, personality, compatibility_profile, created_at"
+      )
       .eq("user_id", user.id)
       .maybeSingle(),
     supabase
       .from("onboarding_profiles")
-      .select("user_id, first_name, age_range, location_preference, intent, tendencies, personality, created_at")
+      .select(
+        "user_id, first_name, age_range, location_preference, intent, tendencies, personality, compatibility_profile, created_at"
+      )
       .neq("user_id", user.id)
       .order("created_at", { ascending: false })
       .limit(200),
@@ -81,6 +114,16 @@ export async function GET(request: Request) {
       .select("actor_user_id")
       .eq("target_user_id", user.id)
       .eq("decision", "like"),
+    supabase
+      .from("revealed_preferences")
+      .select("learned_weights, stated_vs_revealed, sample_size, last_updated")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase
+      .from("user_match_weights")
+      .select("weights")
+      .eq("user_id", user.id)
+      .maybeSingle()
   ]);
 
   if (currentProfileRes.error || !currentProfileRes.data) {
@@ -106,7 +149,25 @@ export async function GET(request: Request) {
   }
 
   const currentProfile = toProfile(currentProfileRes.data as Record<string, unknown>);
+  const currentCompatibilityFull = toCompatibilityProfileFromRow(
+    user.id,
+    currentProfileRes.data as Record<string, unknown>
+  );
+  const currentCompatibilityProfile = toCompatibilityProfileForReport(currentProfileRes.data as Record<string, unknown>);
   const allCandidates = (profilesRes.data ?? []).map((row) => toProfile(row as Record<string, unknown>));
+  const compatibilityProfileByCandidateId = new Map(
+    (profilesRes.data ?? []).map((row) => {
+      const record = row as Record<string, unknown>;
+      return [String(record.user_id), toCompatibilityProfileForReport(record)] as const;
+    })
+  );
+  const fullCompatibilityByCandidateId = new Map(
+    (profilesRes.data ?? []).map((row) => {
+      const record = row as Record<string, unknown>;
+      const id = String(record.user_id);
+      return [id, toCompatibilityProfileFromRow(id, record)] as const;
+    })
+  );
   const swipeMap = new Map(
     ((mySwipesRes.data ?? []) as Array<{ target_user_id: string; decision: string }>).map((row) => [String(row.target_user_id), String(row.decision)])
   );
@@ -119,9 +180,44 @@ export async function GET(request: Request) {
     return true;
   });
 
+  const revealedPreferences: RevealedPreferencesRecord | null =
+    revealedPrefsRes.data && !revealedPrefsRes.error
+      ? {
+          learnedWeights: (revealedPrefsRes.data.learned_weights ?? {
+            emotional_openness_preferred: 0,
+            conflict_speed_preferred: 0,
+            relationship_vision_preferred: [],
+            lifestyle_energy_preferred: []
+          }) as RevealedPreferencesRecord["learnedWeights"],
+          statedVsRevealed: (revealedPrefsRes.data.stated_vs_revealed ?? []) as RevealedPreferencesRecord["statedVsRevealed"],
+          sampleSize: typeof revealedPrefsRes.data.sample_size === "number" ? revealedPrefsRes.data.sample_size : 0,
+          lastUpdated:
+            typeof revealedPrefsRes.data.last_updated === "string"
+              ? revealedPrefsRes.data.last_updated
+              : new Date().toISOString()
+        }
+      : null;
+  const userMatchWeights: UserMatchWeights =
+    weightsRes.data && !weightsRes.error
+      ? ({ ...DEFAULT_USER_MATCH_WEIGHTS, ...(weightsRes.data.weights as Record<string, number>) } as UserMatchWeights)
+      : DEFAULT_USER_MATCH_WEIGHTS;
+  const rankingScoreById = new Map<string, number>();
+  for (const candidate of filtered) {
+    const candidateFull = fullCompatibilityByCandidateId.get(candidate.id) ?? null;
+    const learnedScore =
+      currentCompatibilityFull && candidateFull
+        ? scoreWithLearning(currentCompatibilityFull, candidateFull, revealedPreferences, userMatchWeights)
+        : scoreCompatibility(currentProfile, candidate).totalScore;
+    rankingScoreById.set(candidate.id, learnedScore);
+  }
+
   const prioritized = [
-    ...filtered.filter((candidate) => incomingLikeIds.has(candidate.id)),
-    ...filtered.filter((candidate) => !incomingLikeIds.has(candidate.id))
+    ...filtered
+      .filter((candidate) => incomingLikeIds.has(candidate.id))
+      .sort((a, b) => (rankingScoreById.get(b.id) ?? 0) - (rankingScoreById.get(a.id) ?? 0)),
+    ...filtered
+      .filter((candidate) => !incomingLikeIds.has(candidate.id))
+      .sort((a, b) => (rankingScoreById.get(b.id) ?? 0) - (rankingScoreById.get(a.id) ?? 0))
   ];
   const candidateIds = prioritized.map((candidate) => candidate.id);
   const incomingListIds = ((incomingLikesRes.data ?? []) as Array<{ actor_user_id: string }>)
@@ -169,7 +265,14 @@ export async function GET(request: Request) {
   );
 
   const toCandidatePayload = (candidate: OnboardingProfile): CandidatePayload => {
+    const scored = scoreCompatibility(currentProfile, candidate);
     const insight = toInsights(currentProfile, candidate);
+    const understandingMatch = generateIncompatibilityReport(
+      currentCompatibilityProfile,
+      compatibilityProfileByCandidateId.get(candidate.id) ?? null,
+      candidate.firstName,
+      scored.totalScore
+    );
     return {
       id: candidate.id,
       firstName: candidate.firstName,
@@ -178,7 +281,8 @@ export async function GET(request: Request) {
       photoUrl: signedUrlByUser.get(candidate.id) ?? photoInlineByUser.get(candidate.id) ?? null,
       compatibilityHighlight: insight.highlight,
       watchForInsight: insight.watchFor,
-      likedYou: incomingLikeIds.has(candidate.id)
+      likedYou: incomingLikeIds.has(candidate.id),
+      understandingMatch
     };
   };
 
@@ -307,6 +411,38 @@ export async function POST(request: Request) {
 
   if (createdMatchRes.error || !createdMatchRes.data) {
     return NextResponse.json({ error: "Could not create match." }, { status: 500 });
+  }
+
+  const [userProfileRes, candidateProfileRes] = await Promise.all([
+    supabase
+      .from("onboarding_profiles")
+      .select("user_id, first_name, age_range, location_preference, intent, tendencies, personality, created_at")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase
+      .from("onboarding_profiles")
+      .select("user_id, first_name, age_range, location_preference, intent, tendencies, personality, created_at")
+      .eq("user_id", candidateId)
+      .maybeSingle()
+  ]);
+  if (userProfileRes.data && candidateProfileRes.data) {
+    const currentProfile = toProfile(userProfileRes.data as Record<string, unknown>);
+    const candidateProfile = toProfile(candidateProfileRes.data as Record<string, unknown>);
+    const scoreForCurrent = scoreCompatibility(currentProfile, candidateProfile).totalScore;
+    const scoreForCandidate = scoreCompatibility(candidateProfile, currentProfile).totalScore;
+    await ensureMatchOutcomeRows(supabase, {
+      matchId: String(createdMatchRes.data.id),
+      userAId: user.id,
+      userBId: candidateId,
+      scoreForA: scoreForCurrent,
+      scoreForB: scoreForCandidate
+    }).catch(() => undefined);
+  } else {
+    await ensureMatchOutcomeRows(supabase, {
+      matchId: String(createdMatchRes.data.id),
+      userAId: user.id,
+      userBId: candidateId
+    }).catch(() => undefined);
   }
 
   return NextResponse.json(

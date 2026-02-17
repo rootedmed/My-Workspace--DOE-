@@ -44,7 +44,7 @@ export async function POST(request: Request) {
 
   const currentStep = Math.max(1, Number(payload?.currentStep ?? 1));
   const requestedNextStep = Math.max(currentStep, Number(payload?.nextStep ?? currentStep));
-  const totalSteps = Math.max(1, Number(payload?.totalSteps ?? 8));
+  const totalSteps = Math.max(1, Number(payload?.totalSteps ?? 9));
   const mode = payload?.mode === "deep" ? "deep" : "deep";
 
   const supabase = await createServerSupabaseClient();

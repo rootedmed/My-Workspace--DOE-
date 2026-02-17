@@ -52,16 +52,14 @@ describe("ResultsPage", () => {
     expect(redirectMock).toHaveBeenCalledWith("/onboarding");
   });
 
-  it("renders trait cards and discover CTA", async () => {
+  it("renders relationship DNA snapshot and discover CTA", async () => {
     getCurrentUserMock.mockResolvedValueOnce({ id: "user-1", email: "maya@example.com", firstName: "Maya" });
     getOnboardingV2StateMock.mockResolvedValueOnce({
       hasProfile: true,
       compatibilityProfile: {
         conflict_speed: 3,
-        emotional_openness: 2,
-        support_need: "validation",
+        love_expression: ["time", "acts"],
         relationship_vision: "friendship",
-        growth_intention: "alignment"
       },
       completedAt: new Date().toISOString(),
       readinessScore: 72,
@@ -70,9 +68,9 @@ describe("ResultsPage", () => {
 
     render(await ResultsPage());
 
-    expect(screen.getByRole("heading", { name: "Your relationship style" })).toBeInTheDocument();
-    expect(screen.getByText("Conflict Pace")).toBeInTheDocument();
-    expect(screen.getByText("Emotional Openness")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Built from your onboarding answers" })).toBeInTheDocument();
+    expect(screen.getByText("Attachment Style")).toBeInTheDocument();
+    expect(screen.getByText("Conflict Style")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "See compatible matches" })).toHaveAttribute("href", "/discover");
   });
 });

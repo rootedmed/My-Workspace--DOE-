@@ -23,7 +23,8 @@ const payloadSchema = z.object({
   emotional_openness: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
   relationship_vision: z.enum(["independent", "enmeshed", "friendship", "safe", "adventure"]),
   relational_strengths: z.array(z.enum(["consistency", "loyalty", "honesty", "joy", "support"])).min(1).max(2),
-  growth_intention: z.enum(["depth", "balance", "chosen", "peace", "alignment"])
+  growth_intention: z.enum(["depth", "balance", "chosen", "peace", "alignment"]),
+  lifestyle_energy: z.enum(["introspective", "high_energy", "social", "intellectual", "spontaneous"]).optional()
 });
 
 export async function POST(request: Request) {
@@ -165,9 +166,9 @@ export async function POST(request: Request) {
     .upsert(
       {
         user_id: user.id,
-        current_step: 8,
+        current_step: 9,
         completed: true,
-        total_steps: 8,
+        total_steps: 9,
         mode: "deep",
         updated_at: completedAt
       },

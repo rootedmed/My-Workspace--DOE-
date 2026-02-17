@@ -9,6 +9,7 @@ import {
   type ConflictSpeed,
   type EmotionalOpenness,
   type GrowthIntention,
+  type LifestyleEnergy,
   type LoveExpression,
   type PastAttribution,
   type RelationshipVision,
@@ -38,6 +39,7 @@ type QuestionDef<T extends string | number> = {
   instruction?: string;
   maxSelect?: number;
   insight: string;
+  isBonus?: boolean;
 };
 
 type OnboardingAnswers = {
@@ -49,6 +51,7 @@ type OnboardingAnswers = {
   relationship_vision?: RelationshipVision;
   relational_strengths?: RelationalStrength[];
   growth_intention?: GrowthIntention;
+  lifestyle_energy?: LifestyleEnergy;
 };
 
 type ProgressResponse = {
@@ -66,7 +69,7 @@ const questions: Array<QuestionDef<string | number>> = [
     id: "past_attribution",
     dimension: "Past Reflection",
     dimensionColor: "#C4865A",
-    prompt: "Let's start with some reflection.",
+    prompt: "First question. When a past relationship ended, what was really going on?",
     question: "When a past relationship ended, what do you feel was the core issue?",
     type: "cards",
     options: [
@@ -82,7 +85,7 @@ const questions: Array<QuestionDef<string | number>> = [
     id: "conflict_speed",
     dimension: "Conflict Style",
     dimensionColor: "#D4607A",
-    prompt: "No relationship is conflict-free.",
+    prompt: "Let's talk about fighting. Everyone does it — the question is how.",
     question: "In a disagreement with someone you love, what do you tend to do first?",
     type: "spectrum",
     leftLabel: "Talk it through immediately",
@@ -100,7 +103,7 @@ const questions: Array<QuestionDef<string | number>> = [
     id: "love_expression",
     dimension: "Love Expression",
     dimensionColor: "#A06BB8",
-    prompt: "Love shows up differently for everyone.",
+    prompt: "How do you show someone you love them? (Not what you think you should say — what you actually do.)",
     question: "How do you naturally express love to someone you care about?",
     type: "rank",
     options: [
@@ -118,7 +121,7 @@ const questions: Array<QuestionDef<string | number>> = [
     id: "support_need",
     dimension: "Support Needs",
     dimensionColor: "#5A8FC4",
-    prompt: "Hard times reveal everything.",
+    prompt: "When life gets hard and you're stressed, what do you need from a partner?",
     question: "When you're stressed or going through something hard, what do you need from a partner?",
     type: "cards",
     options: [
@@ -134,7 +137,7 @@ const questions: Array<QuestionDef<string | number>> = [
     id: "emotional_openness",
     dimension: "Emotional Openness",
     dimensionColor: "#6BA89E",
-    prompt: "This one takes honesty.",
+    prompt: "Real talk: How comfortable are you with emotional vulnerability in a relationship?",
     question: "How comfortable are you with emotional vulnerability in a relationship?",
     type: "spectrum",
     leftLabel: "Very open — I share deeply",
@@ -152,7 +155,7 @@ const questions: Array<QuestionDef<string | number>> = [
     id: "relationship_vision",
     dimension: "Relationship Vision",
     dimensionColor: "#C4A85A",
-    prompt: "Let's talk about what you're actually building.",
+    prompt: "What does a truly healthy relationship look like to you — not in theory, in everyday life?",
     question: "What does a truly healthy relationship look like to you in everyday life?",
     type: "cards",
     options: [
@@ -168,7 +171,8 @@ const questions: Array<QuestionDef<string | number>> = [
     id: "relational_strengths",
     dimension: "Self-Awareness",
     dimensionColor: "#8FA65A",
-    prompt: "Give yourself some credit.",
+    prompt:
+      "Looking back, what did you bring to past relationships that you're genuinely proud of? (And don't say nothing — we won't believe you.)",
     question: "Looking back, what did you bring to past relationships that you're genuinely proud of?",
     type: "rank",
     options: [
@@ -186,7 +190,7 @@ const questions: Array<QuestionDef<string | number>> = [
     id: "growth_intention",
     dimension: "Growth Intention",
     dimensionColor: "#B86B8A",
-    prompt: "Almost there. This one matters most.",
+    prompt: "Last one. What's the one thing you most want to be different in your next relationship?",
     question: "What's the one thing you most want to be different in your next relationship?",
     type: "cards",
     options: [
@@ -197,6 +201,23 @@ const questions: Array<QuestionDef<string | number>> = [
       { label: "Real alignment", desc: "Same vision for life and what we're building", value: "alignment" }
     ],
     insight: "This is your growth signal — it tells us exactly what you've learned and what you're ready for."
+  },
+  {
+    id: "lifestyle_energy",
+    dimension: "Lifestyle",
+    dimensionColor: "#C4865A",
+    prompt: "Bonus question: If your ideal Saturday night was a movie genre, what would it be?",
+    question: "If your ideal Saturday night was a movie genre, what would it be?",
+    type: "cards",
+    options: [
+      { label: "Quiet indie film", desc: "Calm, introspective, small gathering", value: "introspective" },
+      { label: "Action blockbuster", desc: "High energy, excitement, stimulation", value: "high_energy" },
+      { label: "Rom-com marathon", desc: "Lighthearted, social, laughter-filled", value: "social" },
+      { label: "Documentary deep-dive", desc: "Curious, learning-focused, engaged", value: "intellectual" },
+      { label: "Whatever's playing", desc: "Spontaneous, go-with-the-flow, adaptable", value: "spontaneous" }
+    ],
+    insight: "This helps us match you with people whose energy level fits yours.",
+    isBonus: true
   }
 ];
 
@@ -498,6 +519,44 @@ function InsightBubble({ text }: { text: string }) {
   );
 }
 
+function getLivePreviewText(answers: OnboardingAnswers): string {
+  const traits: string[] = [];
+  const loveSet = new Set(answers.love_expression ?? []);
+  if (loveSet.has("time")) traits.push("value quality presence");
+  if (loveSet.has("acts")) traits.push("show care through practical support");
+  if (loveSet.has("words")) traits.push("communicate feelings clearly");
+  if (answers.relationship_vision === "adventure") traits.push("want a relationship that feels like a shared adventure");
+  if (answers.relationship_vision === "safe") traits.push("prefer a calm, stable relationship rhythm");
+
+  if (traits.length === 0) {
+    return "Based on your answers so far, you're most compatible with people who match your emotional pacing and support style.";
+  }
+  if (traits.length === 1) {
+    return `Based on your answers so far, you're most compatible with people who ${traits[0]}.`;
+  }
+  return `Based on your answers so far, you're most compatible with people who ${traits[0]} and ${traits[1]}.`;
+}
+
+function LivePreview({ text }: { text: string }) {
+  return (
+    <div
+      style={{
+        marginTop: "14px",
+        background: "rgba(196, 134, 90, 0.14)",
+        border: "1px solid rgba(196, 134, 90, 0.35)",
+        borderRadius: "12px",
+        padding: "12px 14px",
+        fontFamily: "'DM Sans', sans-serif",
+        fontSize: "12px",
+        color: "rgba(255,255,255,0.82)",
+        lineHeight: 1.5
+      }}
+    >
+      {text} Let&apos;s keep going.
+    </div>
+  );
+}
+
 function SummaryScreen({
   profile,
   onContinue
@@ -522,7 +581,7 @@ function SummaryScreen({
       label: "Relational Vision",
       score: profile.readiness_score,
       color: "#6BA89E",
-      q: "Q6, Q7, Q8"
+      q: "Q6, Q7, Q8, Q9"
     }
   ];
 
@@ -679,7 +738,8 @@ export function OnboardingFlow({
       !answers.emotional_openness ||
       !answers.relationship_vision ||
       !answers.relational_strengths ||
-      !answers.growth_intention
+      !answers.growth_intention ||
+      !answers.lifestyle_energy
     ) {
       return null;
     }
@@ -694,6 +754,7 @@ export function OnboardingFlow({
       relationship_vision: answers.relationship_vision,
       relational_strengths: answers.relational_strengths,
       growth_intention: answers.growth_intention,
+      lifestyle_energy: answers.lifestyle_energy,
       attachment_axis: "secure" as const,
       completedAt: new Date()
     };
@@ -741,7 +802,8 @@ export function OnboardingFlow({
         emotional_openness: draft.emotional_openness as EmotionalOpenness | undefined,
         relationship_vision: draft.relationship_vision as RelationshipVision | undefined,
         relational_strengths: draft.relational_strengths as RelationalStrength[] | undefined,
-        growth_intention: draft.growth_intention as GrowthIntention | undefined
+        growth_intention: draft.growth_intention as GrowthIntention | undefined,
+        lifestyle_energy: draft.lifestyle_energy as LifestyleEnergy | undefined
       });
       setCurrentQ(Math.max(0, Math.min((payload.progress.current_step ?? 1) - 1, questions.length - 1)));
       setDone(Boolean(payload.progress.completed));
@@ -819,7 +881,8 @@ export function OnboardingFlow({
           emotional_openness: completedProfile.emotional_openness,
           relationship_vision: completedProfile.relationship_vision,
           relational_strengths: completedProfile.relational_strengths,
-          growth_intention: completedProfile.growth_intention
+          growth_intention: completedProfile.growth_intention,
+          lifestyle_energy: completedProfile.lifestyle_energy
         })
       });
 
@@ -915,6 +978,26 @@ export function OnboardingFlow({
           >
             {q.prompt}
           </div>
+          {q.isBonus ? (
+            <div
+              style={{
+                display: "inline-flex",
+                width: "fit-content",
+                marginBottom: "12px",
+                borderRadius: "999px",
+                padding: "4px 10px",
+                border: "1px solid rgba(255,255,255,0.2)",
+                background: "rgba(255,255,255,0.06)",
+                fontFamily: "'DM Sans', sans-serif",
+                fontSize: "11px",
+                color: "rgba(255,255,255,0.72)",
+                letterSpacing: "0.06em",
+                textTransform: "uppercase"
+              }}
+            >
+              Bonus Question
+            </div>
+          ) : null}
 
           <h2
             style={{
@@ -970,6 +1053,7 @@ export function OnboardingFlow({
             ) : null}
 
             <InsightBubble text={q.insight} />
+            {currentQ >= 3 ? <LivePreview text={getLivePreviewText(answers)} /> : null}
             {error ? (
               <p style={{ marginTop: "14px", color: "#ffb0b0", fontFamily: "'DM Sans', sans-serif", fontSize: "12px" }}>
                 {error}

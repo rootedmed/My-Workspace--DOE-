@@ -33,6 +33,7 @@ export type RelationalStrength =
   | "support";
 
 export type GrowthIntention = "depth" | "balance" | "chosen" | "peace" | "alignment";
+export type LifestyleEnergy = "introspective" | "high_energy" | "social" | "intellectual" | "spontaneous";
 
 export type AttachmentAxis =
   | "secure"
@@ -51,6 +52,7 @@ export interface UserCompatibilityProfile {
   relationship_vision: RelationshipVision;
   relational_strengths: RelationalStrength[];
   growth_intention: GrowthIntention;
+  lifestyle_energy?: LifestyleEnergy;
   attachment_axis: AttachmentAxis;
   readiness_score: number;
   completedAt: Date;
@@ -212,6 +214,30 @@ export function computeCompatibility(a: UserCompatibilityProfile, b: UserCompati
   if (b.relational_strengths.includes("joy") && a.relationship_vision === "safe") score += 5;
   if (b.relational_strengths.includes("support") && a.relationship_vision === "adventure") score += 5;
   if (b.relational_strengths.includes("honesty") && a.growth_intention === "depth") score += 5;
+
+  if (a.lifestyle_energy && b.lifestyle_energy) {
+    if (a.lifestyle_energy === b.lifestyle_energy) {
+      score += 5;
+      notes.push("Your energy and social rhythm look naturally aligned.");
+    } else {
+      const compatiblePairs = new Set([
+        "introspective:intellectual",
+        "intellectual:introspective",
+        "high_energy:spontaneous",
+        "spontaneous:high_energy",
+        "social:spontaneous",
+        "spontaneous:social"
+      ]);
+      if (compatiblePairs.has(`${a.lifestyle_energy}:${b.lifestyle_energy}`)) {
+        score += 3;
+      } else if (
+        (a.lifestyle_energy === "introspective" && b.lifestyle_energy === "high_energy") ||
+        (a.lifestyle_energy === "high_energy" && b.lifestyle_energy === "introspective")
+      ) {
+        warnings.push("Different energy levels may require clear planning around social time.");
+      }
+    }
+  }
 
   score = Math.max(0, Math.min(100, Math.round(score)));
 

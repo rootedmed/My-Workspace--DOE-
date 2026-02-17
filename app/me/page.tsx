@@ -34,6 +34,11 @@ export default async function MePage() {
                   Redo onboarding
                 </Link>
               ) : null}
+              {hasProfile ? (
+                <Link href="/guest" className="button-link ghost">
+                  Guest compatibility
+                </Link>
+              ) : null}
             </div>
           </section>
 

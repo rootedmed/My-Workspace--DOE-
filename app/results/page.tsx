@@ -3,11 +3,13 @@ import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { BottomTabs } from "@/components/navigation/BottomTabs";
 import { getOnboardingV2State } from "@/lib/onboarding/v2";
+import { ShareSnapshotButton } from "@/components/results/ShareSnapshotButton";
 
-type TraitCard = {
-  label: string;
-  value: string;
-  blurb: string;
+type SnapshotData = {
+  attachmentStyle: string;
+  conflictStyle: string;
+  loveExpression: string;
+  relationshipVision: string;
 };
 
 function asString(value: unknown): string {
@@ -18,76 +20,56 @@ function asNumber(value: unknown): number {
   return typeof value === "number" ? value : 3;
 }
 
-function toTraitCards(profile: Record<string, unknown>): TraitCard[] {
+function labelFromAttachmentAxis(axis: string): string {
+  if (axis === "secure") return "Secure";
+  if (axis === "anxious_lean") return "Secure with anxious tendencies";
+  if (axis === "avoidant_lean") return "Secure with independent tendencies";
+  if (axis === "anxious") return "Anxiously attached";
+  if (axis === "avoidant") return "Avoidantly attached";
+  return "Secure-leaning";
+}
+
+function toSnapshotData(profile: Record<string, unknown>, attachmentAxis: string | null): SnapshotData {
   const conflictSpeed = asNumber(profile.conflict_speed);
-  const openness = asNumber(profile.emotional_openness);
-  const supportNeed = asString(profile.support_need);
   const vision = asString(profile.relationship_vision);
-  const growth = asString(profile.growth_intention);
+  const loveExpression = Array.isArray(profile.love_expression)
+    ? profile.love_expression.filter((item): item is string => typeof item === "string")
+    : [];
 
-  const conflictStyle =
-    conflictSpeed <= 2
-      ? { value: "Approach first", blurb: "You prefer to resolve conflict quickly." }
-      : conflictSpeed >= 4
-        ? { value: "Process first", blurb: "You prefer space before returning to conflict." }
-        : { value: "Balanced", blurb: "You flex between immediate talk and reflection." };
-
-  const opennessStyle =
-    openness <= 2
-      ? { value: "Very open", blurb: "You are comfortable with emotional depth." }
-      : openness >= 4
-        ? { value: "Selective", blurb: "You open up carefully and value emotional pacing." }
-        : { value: "Developing", blurb: "You are intentional about emotional openness." };
-
-  const supportStyle = {
-    value:
-      supportNeed === "validation"
-        ? "Validation"
-        : supportNeed === "practical"
-          ? "Practical help"
-          : supportNeed === "presence"
-            ? "Close presence"
-            : supportNeed === "space"
-              ? "Space first"
-              : "Distraction",
-    blurb: "This is what you tend to need most under stress."
+  const loveLabels: Record<string, string> = {
+    acts: "Acts of care",
+    time: "Quality presence",
+    words: "Words and affirmation",
+    physical: "Physical closeness",
+    gifts: "Thoughtful surprises"
   };
+  const visionLabel =
+    vision === "independent"
+      ? "Independent together"
+      : vision === "enmeshed"
+        ? "Deeply intertwined"
+        : vision === "friendship"
+          ? "Best-friend foundation"
+          : vision === "safe"
+            ? "Safe harbour"
+            : "Shared adventure";
+  const conflictLabel =
+    conflictSpeed === 1
+      ? "Immediate processor"
+      : conflictSpeed === 2
+        ? "Engaged communicator"
+        : conflictSpeed === 3
+          ? "Situational responder"
+          : conflictSpeed === 4
+            ? "Thoughtful processor"
+            : "Space-first processor";
 
-  const visionStyle = {
-    value:
-      vision === "independent"
-        ? "Independent together"
-        : vision === "enmeshed"
-          ? "Deeply intertwined"
-          : vision === "friendship"
-            ? "Best-friend foundation"
-            : vision === "safe"
-              ? "Safe harbour"
-              : "Shared adventure",
-    blurb: "This is your default relationship structure preference."
+  return {
+    attachmentStyle: labelFromAttachmentAxis(attachmentAxis ?? ""),
+    conflictStyle: conflictLabel,
+    loveExpression: loveExpression.map((item) => loveLabels[item] ?? item).slice(0, 2).join(" + ") || "Balanced mix",
+    relationshipVision: visionLabel
   };
-
-  const growthStyle = {
-    value:
-      growth === "depth"
-        ? "Deeper honesty"
-        : growth === "balance"
-          ? "Better balance"
-          : growth === "chosen"
-            ? "Being chosen"
-            : growth === "peace"
-              ? "Less conflict"
-              : "Real alignment",
-    blurb: "Your top growth intention for your next relationship."
-  };
-
-  return [
-    { label: "Conflict Pace", ...conflictStyle },
-    { label: "Emotional Openness", ...opennessStyle },
-    { label: "Support Need", ...supportStyle },
-    { label: "Relationship Vision", ...visionStyle },
-    { label: "Growth Intention", ...growthStyle }
-  ];
 }
 
 export default async function ResultsPage() {
@@ -101,34 +83,46 @@ export default async function ResultsPage() {
     redirect("/onboarding");
   }
 
-  const cards = toTraitCards(onboarding.compatibilityProfile);
+  const snapshot = toSnapshotData(onboarding.compatibilityProfile, onboarding.attachmentAxis);
 
   return (
     <main className="app-main">
       <section className="app-shell">
         <div className="app-screen">
           <div className="stack">
-            <section className="panel elevated stack">
-              <p className="eyebrow">Dating Style Snapshot</p>
-              <h1>Your relationship style</h1>
-              <p className="muted">A direct summary from your new onboarding profile.</p>
+            <section className="results-dna">
+              <p className="eyebrow results-eyebrow">Your Relationship DNA</p>
+              <h1 className="results-title">Built from your onboarding answers</h1>
+
+              <div className="results-dna-grid" aria-label="Relationship DNA traits">
+                <article className="results-dna-row">
+                  <span>Attachment Style</span>
+                  <strong>{snapshot.attachmentStyle}</strong>
+                </article>
+                <article className="results-dna-row">
+                  <span>Conflict Style</span>
+                  <strong>{snapshot.conflictStyle}</strong>
+                </article>
+                <article className="results-dna-row">
+                  <span>Love Expression</span>
+                  <strong>{snapshot.loveExpression}</strong>
+                </article>
+                <article className="results-dna-row">
+                  <span>Relationship Vision</span>
+                  <strong>{snapshot.relationshipVision}</strong>
+                </article>
+              </div>
+
+              <p className="results-watermark">Built on Commitment Match</p>
             </section>
 
-            <section className="stats-grid" aria-label="Dating style traits">
-              {cards.map((card) => (
-                <article key={card.label} className="metric">
-                  <span>{card.label}</span>
-                  <strong>{card.value}</strong>
-                  <p className="muted small">{card.blurb}</p>
-                </article>
-              ))}
-            </section>
+            <ShareSnapshotButton data={snapshot} appName="Commitment Match" />
 
             <section className="panel stack">
               <h2>What this means</h2>
               <p className="muted">
-                Your profile is now calibrated for compatibility-first matching. Discover will prioritize stronger
-                fit and call out potential friction early.
+                Your profile is now calibrated for compatibility-first matching with transparent strengths and friction
+                points.
               </p>
               <Link className="button-link" href="/discover">
                 See compatible matches
