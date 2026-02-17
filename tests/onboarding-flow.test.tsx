@@ -2,6 +2,10 @@ import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { OnboardingFlow } from "@/components/OnboardingFlow";
 
+const { pushMock } = vi.hoisted(() => ({
+  pushMock: vi.fn()
+}));
+
 vi.mock("@/components/auth/csrf", () => ({
   withCsrfHeaders: vi.fn(async (base: Record<string, string> = {}) => ({
     ...base,
@@ -9,8 +13,13 @@ vi.mock("@/components/auth/csrf", () => ({
   }))
 }));
 
+vi.mock("next/navigation", () => ({
+  useRouter: () => ({ push: pushMock })
+}));
+
 afterEach(() => {
   vi.unstubAllGlobals();
+  pushMock.mockReset();
 });
 
 describe("OnboardingFlow", () => {
@@ -152,7 +161,7 @@ describe("OnboardingFlow", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Your Dating Style Snapshot")).toBeInTheDocument();
+      expect(pushMock).toHaveBeenCalledWith("/results");
     });
   });
 

@@ -3,8 +3,9 @@
 import Image from "next/image";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { AnimatePresence, motion } from "framer-motion";
-import type { MatchResult, OnboardingProfile, UserPhoto } from "@/lib/domain/types";
+import type { OnboardingProfile, UserPhoto } from "@/lib/domain/types";
 import { withCsrfHeaders } from "@/components/auth/csrf";
+import { useRouter } from "next/navigation";
 
 type WizardMode = "deep";
 type AppTab = "home" | "results" | "discover" | "matches" | "me";
@@ -24,11 +25,15 @@ type OnboardingResponse = {
   tendenciesSummary: string[];
 };
 
-type MatchResponse = {
-  userId: string;
-  matches: MatchResult[];
-  emptyReason?: string | null;
+type MutualMatch = {
+  id: string;
+  counterpartId: string;
+  counterpartFirstName: string;
+  photoUrl: string | null;
+  createdAt: string;
 };
+
+type MatchResponse = { matches: MutualMatch[] };
 
 type PhotosResponse = {
   photos: UserPhoto[];
@@ -39,6 +44,10 @@ type DiscoverCandidate = {
   firstName: string;
   ageRange: string;
   locationPreference: string;
+  photoUrl?: string | null;
+  compatibilityHighlight?: string;
+  watchForInsight?: string;
+  likedYou?: boolean;
 };
 
 type DiscoverResponse = {
@@ -54,25 +63,6 @@ type ProgressResponse = {
     mode: "fast" | "deep";
   };
   draft: Record<string, string | number>;
-};
-
-type ChatMessage = {
-  id: string;
-  sender_id: string;
-  body: string;
-  type: "message" | "suggested_topic" | "decision_prompt" | "decision_complete" | "system";
-  created_at: string;
-};
-
-type ThreadResponse = {
-  conversation: { id: string };
-  messages: ChatMessage[];
-  decisionTrack: {
-    day_number: number;
-    status: "pending" | "in_progress" | "completed";
-    prompt_id: string;
-  };
-  suggestedTopics: string[];
 };
 
 type QuestionOption = {
@@ -193,6 +183,7 @@ const questions: QuestionDef[] = [
 type OnboardingFlowProps = {
   userId: string;
   firstName?: string | null;
+  initialTab?: AppTab;
 };
 
 function setFieldValue(values: WizardValues, field: string, nextValue: string): WizardValues {
@@ -243,8 +234,9 @@ function valuesFromProfile(profile: OnboardingProfile): WizardValues {
   };
 }
 
-export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
-  const [tab, setTab] = useState<AppTab>("home");
+export function OnboardingFlow({ userId, firstName, initialTab = "home" }: OnboardingFlowProps) {
+  const router = useRouter();
+  const [tab, setTab] = useState<AppTab>(initialTab);
   const [mode] = useState<WizardMode>("deep");
   const [questionIndex, setQuestionIndex] = useState(0);
   const [values, setValues] = useState<WizardValues>(initialValues);
@@ -255,7 +247,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
   const [loadingProgress, setLoadingProgress] = useState(true);
   const [onboardingError, setOnboardingError] = useState<string | null>(null);
   const [saved, setSaved] = useState<OnboardingResponse | null>(null);
-  const [matches, setMatches] = useState<MatchResult[]>([]);
+  const [matches, setMatches] = useState<MutualMatch[]>([]);
   const [matchesError, setMatchesError] = useState<string | null>(null);
   const [matchesEmptyReason, setMatchesEmptyReason] = useState<string | null>(null);
   const [savedBanner, setSavedBanner] = useState<string | null>(null);
@@ -265,10 +257,6 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
   const [discoverCandidates, setDiscoverCandidates] = useState<DiscoverCandidate[]>([]);
   const [discoverError, setDiscoverError] = useState<string | null>(null);
   const [discoverEmptyReason, setDiscoverEmptyReason] = useState<string | null>(null);
-  const [threadParticipantId, setThreadParticipantId] = useState<string | null>(null);
-  const [thread, setThread] = useState<ThreadResponse | null>(null);
-  const [chatError, setChatError] = useState<string | null>(null);
-  const [chatDraft, setChatDraft] = useState("");
 
   const totalSteps = questions.length;
   const currentQuestion = questions[Math.min(questionIndex, totalSteps - 1)] ?? questions[0]!;
@@ -500,7 +488,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
       }
 
       setIsEditingOnboarding(false);
-      setTab("results");
+      router.push("/results");
     } catch (cause) {
       console.error("onboarding_submit_failed", cause);
       const message = cause instanceof Error ? cause.message : "Could not save onboarding.";
@@ -509,19 +497,19 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
       setLoading(false);
       submitLockRef.current = false;
     }
-  }, [canContinue, loading, isSubmittingAnswer, values, totalSteps, persistCurrentAnswer, firstName, mode]);
+  }, [canContinue, loading, isSubmittingAnswer, values, totalSteps, persistCurrentAnswer, firstName, mode, router]);
 
   async function loadMatches() {
     setMatchesError(null);
-    const response = await fetch("/api/matches/preview", { cache: "no-store" });
+    const response = await fetch("/api/matches/list", { cache: "no-store" });
     if (!response.ok) {
       const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-      setMatchesError(payload?.error ?? "Could not load match results.");
+      setMatchesError(payload?.error ?? "Could not load matches.");
       return;
     }
     const data = (await response.json()) as MatchResponse;
     setMatches(data.matches ?? []);
-    setMatchesEmptyReason(data.emptyReason ?? null);
+    setMatchesEmptyReason((data.matches ?? []).length === 0 ? "No matches yet." : null);
   }
 
   async function loadDiscover() {
@@ -536,34 +524,6 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
     const payload = (await response.json()) as DiscoverResponse;
     setDiscoverCandidates(payload.candidates ?? []);
     setDiscoverEmptyReason(payload.emptyReason ?? null);
-  }
-
-  async function openThread(participantId: string) {
-    setThreadParticipantId(participantId);
-    setChatError(null);
-    const response = await fetch(`/api/chat/thread?participantId=${participantId}`, { cache: "no-store" });
-    if (!response.ok) {
-      setChatError("Could not load guided chat.");
-      return;
-    }
-    const payload = (await response.json()) as ThreadResponse;
-    setThread(payload);
-  }
-
-  async function postThread(action: "send_message" | "send_topic" | "start_day" | "complete_day", body?: string) {
-    if (!threadParticipantId) return;
-
-    const response = await fetch("/api/chat/thread", {
-      method: "POST",
-      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({ participantId: threadParticipantId, action, body })
-    });
-    if (!response.ok) {
-      setChatError("Could not update chat.");
-      return;
-    }
-
-    await openThread(threadParticipantId);
   }
 
   async function uploadPhoto(slot: number, file: File) {
@@ -670,7 +630,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
                     <button type="button" onClick={() => setTab("home")}>Continue</button>
                   ) : (
                     <>
-                      <button type="button" onClick={() => setTab("results")}>Open results</button>
+                      <button type="button" onClick={() => router.push("/results")}>Open results</button>
                       <button type="button" className="ghost" onClick={() => setIsEditingOnboarding(true)}>Edit answers</button>
                     </>
                   )}
@@ -796,66 +756,31 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
             <div className="stack">
               <section className="panel">
                 <h2>Matches</h2>
-                <p className="muted">See compatible matches and move into guided chat.</p>
+                <p className="muted">Mutual likes appear here.</p>
                 <div className="actions">
-                  <button type="button" onClick={loadMatches} disabled={!onboardingCompleted}>Load match results</button>
+                  <button type="button" onClick={loadMatches} disabled={!onboardingCompleted}>Refresh matches</button>
                 </div>
                 {matchesError ? <p role="alert" className="inline-error">{matchesError}</p> : null}
-                {!onboardingCompleted ? <p className="muted">Finish onboarding to generate matches.</p> : null}
+                {!onboardingCompleted ? <p className="muted">Finish onboarding to unlock Discover and matches.</p> : null}
                 {matches.length === 0 && onboardingCompleted ? <p className="muted">{matchesEmptyReason ?? "No matches yet."}</p> : null}
               </section>
 
               {matches.map((match) => (
-                <section key={match.candidateId} className="panel">
-                  <p className="eyebrow">{match.totalScore}/100 compatibility</p>
-                  <h3>{match.candidateFirstName}</h3>
-                  <ul className="list">
-                    {match.topFitReasons.map((reason) => (
-                      <li key={reason}>{reason}</li>
-                    ))}
-                  </ul>
-                  <div className="actions">
-                    <button type="button" onClick={() => openThread(match.candidateId)}>Open guided chat</button>
-                  </div>
+                <section key={match.id} className="panel">
+                  <article className="match-row">
+                    {match.photoUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={match.photoUrl} alt={`${match.counterpartFirstName} profile`} className="match-avatar" />
+                    ) : (
+                      <div className="match-avatar match-avatar-fallback">{match.counterpartFirstName[0] ?? "M"}</div>
+                    )}
+                    <div>
+                      <h3>{match.counterpartFirstName}</h3>
+                      <p className="muted tiny">Mutual match</p>
+                    </div>
+                  </article>
                 </section>
               ))}
-
-              {thread && threadParticipantId ? (
-                <section className="panel">
-                  <h3>Guided chat</h3>
-                  {chatError ? <p role="alert" className="inline-error">{chatError}</p> : null}
-                  <p className="muted">Day {thread.decisionTrack.day_number} of 14 · {thread.decisionTrack.status}</p>
-                  <div className="actions">
-                    <button type="button" className="ghost" onClick={() => postThread("start_day")}>Start today&apos;s prompt</button>
-                    <button type="button" className="ghost" onClick={() => postThread("complete_day")}>Complete today</button>
-                  </div>
-
-                  <p className="muted">Suggested topics</p>
-                  <div className="actions">
-                    {thread.suggestedTopics.slice(0, 3).map((topic) => (
-                      <button key={topic} type="button" className="ghost" onClick={() => postThread("send_topic", topic)}>{topic}</button>
-                    ))}
-                  </div>
-
-                  <div className="stack">
-                    {thread.messages.map((message) => (
-                      <article key={message.id} className="prompt-card">
-                        <p className="tiny muted">{message.type}</p>
-                        <p>{message.body}</p>
-                      </article>
-                    ))}
-                  </div>
-
-                  <label>
-                    Message
-                    <input value={chatDraft} onChange={(event) => setChatDraft(event.target.value)} placeholder="Type a message" />
-                  </label>
-                  <div className="actions">
-                    <button type="button" onClick={() => { void postThread("send_message", chatDraft); setChatDraft(""); }} disabled={chatDraft.trim().length < 1}>Send</button>
-                    <button type="button" className="ghost" onClick={() => openThread(threadParticipantId)}>Refresh chat</button>
-                  </div>
-                </section>
-              ) : null}
             </div>
           ) : null}
 
@@ -876,7 +801,7 @@ export function OnboardingFlow({ userId, firstName }: OnboardingFlowProps) {
                   >
                     Edit Dating Style Analysis
                   </button>
-                  {saved ? <button type="button" onClick={() => setTab("results")}>Open Results</button> : null}
+                  {saved ? <button type="button" onClick={() => router.push("/results")}>Open Results</button> : null}
                 </div>
               </section>
 

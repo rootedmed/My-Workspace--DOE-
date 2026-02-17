@@ -1,39 +1,285 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import type { OnboardingProfile } from "@/lib/domain/types";
+import { scoreCompatibility } from "@/lib/matching/compatibility";
+import { isValidCsrf } from "@/lib/security/csrf";
+import { ensureAppUser } from "@/lib/auth/ensureAppUser";
 
-export async function GET() {
+const PHOTO_BUCKET = "profile-photos";
+
+type CandidatePayload = {
+  id: string;
+  firstName: string;
+  ageRange: string;
+  locationPreference: string;
+  photoUrl: string | null;
+  compatibilityHighlight: string;
+  watchForInsight: string;
+  likedYou: boolean;
+};
+
+const scoreLabel: Record<string, string> = {
+  intent: "Intent alignment",
+  lifestyle: "Lifestyle rhythm",
+  attachment: "Emotional closeness style",
+  conflictRegulation: "Conflict repair style",
+  personality: "Personality fit",
+  novelty: "Novelty vs routine"
+};
+
+function toProfile(row: Record<string, unknown>): OnboardingProfile {
+  return {
+    id: String(row.user_id),
+    firstName: String(row.first_name),
+    ageRange: row.age_range as OnboardingProfile["ageRange"],
+    locationPreference: row.location_preference as OnboardingProfile["locationPreference"],
+    intent: row.intent as OnboardingProfile["intent"],
+    tendencies: row.tendencies as OnboardingProfile["tendencies"],
+    personality: row.personality as OnboardingProfile["personality"],
+    createdAt: String(row.created_at)
+  };
+}
+
+function toInsights(current: OnboardingProfile, candidate: OnboardingProfile): { highlight: string; watchFor: string } {
+  const scored = scoreCompatibility(current, candidate);
+  const pairs = Object.entries(scored.componentScores).map(([key, value]) => ({ key, value }));
+  const best = pairs.sort((a, b) => b.value - a.value)[0];
+  const low = pairs.sort((a, b) => a.value - b.value)[0];
+  return {
+    highlight: `${scoreLabel[best?.key ?? "intent"] ?? "Compatibility"} looks strong.`,
+    watchFor: `${scoreLabel[low?.key ?? "lifestyle"] ?? "Style difference"} may need a quick conversation.`
+  };
+}
+
+export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
   }
 
   const supabase = await createServerSupabaseClient();
-  const profiles = await supabase
-    .from("onboarding_profiles")
-    .select("user_id, first_name, age_range, location_preference, intent, tendencies, personality, created_at")
-    .neq("user_id", user.id)
-    .order("created_at", { ascending: false })
-    .limit(200);
+  const url = new URL(request.url);
+  const lookingForFilter = url.searchParams.get("lookingFor")?.trim() || "";
+  const locationFilter = url.searchParams.get("locationPreference")?.trim() || "";
 
-  if (profiles.error) {
-    return NextResponse.json({ error: "Could not load candidate profiles." }, { status: 500 });
+  const [currentProfileRes, profilesRes, mySwipesRes, incomingLikesRes, mutualRes] = await Promise.all([
+    supabase
+      .from("onboarding_profiles")
+      .select("user_id, first_name, age_range, location_preference, intent, tendencies, personality, created_at")
+      .eq("user_id", user.id)
+      .maybeSingle(),
+    supabase
+      .from("onboarding_profiles")
+      .select("user_id, first_name, age_range, location_preference, intent, tendencies, personality, created_at")
+      .neq("user_id", user.id)
+      .order("created_at", { ascending: false })
+      .limit(200),
+    supabase.from("profile_swipes").select("target_user_id, decision").eq("actor_user_id", user.id),
+    supabase
+      .from("profile_swipes")
+      .select("actor_user_id")
+      .eq("target_user_id", user.id)
+      .eq("decision", "like"),
+    supabase
+      .from("mutual_matches")
+      .select("user_low, user_high")
+      .or(`user_low.eq.${user.id},user_high.eq.${user.id}`)
+  ]);
+
+  if (currentProfileRes.error || !currentProfileRes.data) {
+    return NextResponse.json({ candidates: [], incomingLikes: [], emptyReason: "Finish onboarding to use Discover." }, { status: 200 });
   }
 
-  const candidates = (profiles.data ?? []).map((row) => ({
-    id: String(row.user_id),
-    firstName: String(row.first_name),
-    ageRange: row.age_range,
-    locationPreference: row.location_preference,
-    intent: row.intent,
-    tendencies: row.tendencies,
-    personality: row.personality,
-    createdAt: String(row.created_at)
-  }));
+  if (profilesRes.error || mySwipesRes.error || incomingLikesRes.error || mutualRes.error) {
+    return NextResponse.json({ error: "Could not load discover candidates." }, { status: 500 });
+  }
+
+  const currentProfile = toProfile(currentProfileRes.data as Record<string, unknown>);
+  const allCandidates = (profilesRes.data ?? []).map((row) => toProfile(row as Record<string, unknown>));
+  const swipeMap = new Map(
+    (mySwipesRes.data ?? []).map((row) => [String(row.target_user_id), String(row.decision)])
+  );
+  const incomingLikeIds = new Set((incomingLikesRes.data ?? []).map((row) => String(row.actor_user_id)));
+  const matchedIds = new Set<string>();
+  for (const row of mutualRes.data ?? []) {
+    const low = String(row.user_low);
+    const high = String(row.user_high);
+    if (low !== user.id) matchedIds.add(low);
+    if (high !== user.id) matchedIds.add(high);
+  }
+
+  const filtered = allCandidates.filter((candidate) => {
+    if (matchedIds.has(candidate.id)) return false;
+    if (swipeMap.has(candidate.id)) return false;
+    if (lookingForFilter && candidate.intent.lookingFor !== lookingForFilter) return false;
+    if (locationFilter && candidate.locationPreference !== locationFilter) return false;
+    return true;
+  });
+
+  const prioritized = [
+    ...filtered.filter((candidate) => incomingLikeIds.has(candidate.id)),
+    ...filtered.filter((candidate) => !incomingLikeIds.has(candidate.id))
+  ];
+  const candidateIds = prioritized.map((candidate) => candidate.id);
+  const incomingListIds = (incomingLikesRes.data ?? [])
+    .map((row) => String(row.actor_user_id))
+    .filter((id) => !matchedIds.has(id) && !swipeMap.has(id));
+  const allPhotoIds = [...new Set([...candidateIds, ...incomingListIds])];
+
+  const photosRes = allPhotoIds.length
+    ? await supabase
+        .from("user_photos")
+        .select("user_id, storage_path")
+        .in("user_id", allPhotoIds)
+        .eq("slot", 1)
+    : { data: [], error: null };
+
+  if (photosRes.error) {
+    return NextResponse.json({ error: "Could not load candidate photos." }, { status: 500 });
+  }
+
+  const photoPathByUser = new Map<string, string>();
+  for (const row of photosRes.data ?? []) {
+    photoPathByUser.set(String(row.user_id), String(row.storage_path));
+  }
+
+  const signedUrlByUser = new Map<string, string>();
+  await Promise.all(
+    allPhotoIds.map(async (id) => {
+      const path = photoPathByUser.get(id);
+      if (!path) return;
+      const signed = await supabase.storage.from(PHOTO_BUCKET).createSignedUrl(path, 60 * 60);
+      if (!signed.error && signed.data?.signedUrl) {
+        signedUrlByUser.set(id, signed.data.signedUrl);
+      }
+    })
+  );
+
+  const toCandidatePayload = (candidate: OnboardingProfile): CandidatePayload => {
+    const insight = toInsights(currentProfile, candidate);
+    return {
+      id: candidate.id,
+      firstName: candidate.firstName,
+      ageRange: candidate.ageRange,
+      locationPreference: candidate.locationPreference,
+      photoUrl: signedUrlByUser.get(candidate.id) ?? null,
+      compatibilityHighlight: insight.highlight,
+      watchForInsight: insight.watchFor,
+      likedYou: incomingLikeIds.has(candidate.id)
+    };
+  };
+
+  const candidateById = new Map(allCandidates.map((candidate) => [candidate.id, candidate]));
+  const incomingLikes = incomingListIds
+    .map((id) => candidateById.get(id))
+    .filter((candidate): candidate is OnboardingProfile => Boolean(candidate))
+    .map((candidate) => toCandidatePayload(candidate));
+  const candidates = prioritized.map((candidate) => toCandidatePayload(candidate));
 
   if (candidates.length === 0) {
-    return NextResponse.json({ candidates: [], emptyReason: "No candidates available yet." }, { status: 200 });
+    return NextResponse.json(
+      {
+        candidates: [],
+        incomingLikes,
+        emptyReason: "Invite a friend to test",
+        filters: { lookingFor: lookingForFilter, locationPreference: locationFilter }
+      },
+      { status: 200 }
+    );
   }
 
-  return NextResponse.json({ candidates, emptyReason: null }, { status: 200 });
+  return NextResponse.json({
+    candidates,
+    incomingLikes,
+    emptyReason: null,
+    filters: { lookingFor: lookingForFilter, locationPreference: locationFilter }
+  }, { status: 200 });
+}
+
+export async function POST(request: Request) {
+  if (!isValidCsrf(request)) {
+    return NextResponse.json({ error: "CSRF token missing or invalid" }, { status: 403 });
+  }
+
+  const user = await getCurrentUser();
+  if (!user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  await ensureAppUser({ id: user.id, email: user.email, firstName: user.firstName }).catch(() => undefined);
+
+  const payload = (await request.json().catch(() => null)) as
+    | { candidateId?: string; action?: "like" | "pass" }
+    | null;
+  const candidateId = payload?.candidateId?.trim() ?? "";
+  const action = payload?.action;
+  if (!candidateId || (action !== "like" && action !== "pass")) {
+    return NextResponse.json({ error: "candidateId and valid action are required." }, { status: 400 });
+  }
+  if (candidateId === user.id) {
+    return NextResponse.json({ error: "Cannot swipe on yourself." }, { status: 400 });
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const candidateRes = await supabase
+    .from("onboarding_profiles")
+    .select("user_id, first_name")
+    .eq("user_id", candidateId)
+    .maybeSingle();
+  if (candidateRes.error || !candidateRes.data) {
+    return NextResponse.json({ error: "Candidate not found." }, { status: 404 });
+  }
+
+  const swipeRes = await supabase
+    .from("profile_swipes")
+    .upsert(
+      {
+        actor_user_id: user.id,
+        target_user_id: candidateId,
+        decision: action,
+        updated_at: new Date().toISOString()
+      },
+      { onConflict: "actor_user_id,target_user_id" }
+    )
+    .select("actor_user_id")
+    .single();
+  if (swipeRes.error) {
+    return NextResponse.json({ error: "Could not save swipe." }, { status: 500 });
+  }
+
+  if (action === "pass") {
+    return NextResponse.json({ matched: false }, { status: 200 });
+  }
+
+  const reciprocalRes = await supabase
+    .from("profile_swipes")
+    .select("actor_user_id")
+    .eq("actor_user_id", candidateId)
+    .eq("target_user_id", user.id)
+    .eq("decision", "like")
+    .maybeSingle();
+
+  if (reciprocalRes.error) {
+    return NextResponse.json({ error: "Could not evaluate mutual like." }, { status: 500 });
+  }
+
+  if (!reciprocalRes.data) {
+    return NextResponse.json({ matched: false }, { status: 200 });
+  }
+
+  const [low, high] = [user.id, candidateId].sort();
+  const matchRes = await supabase
+    .from("mutual_matches")
+    .upsert({ user_low: low, user_high: high }, { onConflict: "user_low,user_high" })
+    .select("id")
+    .single();
+  if (matchRes.error || !matchRes.data) {
+    return NextResponse.json({ error: "Could not create match." }, { status: 500 });
+  }
+
+  return NextResponse.json(
+    { matched: true, matchId: String(matchRes.data.id), candidateId, candidateFirstName: String(candidateRes.data.first_name) },
+    { status: 200 }
+  );
 }

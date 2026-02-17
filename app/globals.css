@@ -571,6 +571,77 @@ button.ghost,
   font-size: 1.06rem;
 }
 
+.swipe-stack {
+  position: relative;
+  min-height: 520px;
+}
+
+.swipe-card {
+  position: absolute;
+  inset: 0;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-lg);
+  background: #fff;
+  box-shadow: var(--shadow-soft);
+  padding: var(--space-4);
+  display: grid;
+  gap: var(--space-3);
+  touch-action: pan-y;
+}
+
+.swipe-photo-wrap {
+  position: relative;
+  width: 100%;
+  aspect-ratio: 3 / 4;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  border: 1px solid var(--line);
+  background: var(--surface-alt);
+}
+
+.swipe-photo {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.swipe-photo-fallback {
+  width: 100%;
+  height: 100%;
+  display: grid;
+  place-items: center;
+  color: var(--muted);
+  font-weight: 600;
+}
+
+.swipe-badge {
+  position: absolute;
+  top: var(--space-3);
+  left: var(--space-3);
+}
+
+.match-row {
+  display: flex;
+  gap: var(--space-3);
+  align-items: center;
+}
+
+.match-avatar {
+  width: 52px;
+  height: 52px;
+  border-radius: 50%;
+  object-fit: cover;
+  border: 1px solid var(--line);
+}
+
+.match-avatar-fallback {
+  display: grid;
+  place-items: center;
+  background: var(--surface-alt);
+  color: var(--text);
+  font-weight: 700;
+}
+
 @media (max-width: 720px) {
   main {
     padding: var(--space-4) var(--space-3) var(--space-6);
