@@ -29,6 +29,17 @@ Copy `.env.example` to `.env.local` and set:
 - `NEXT_PUBLIC_SUPABASE_ANON_KEY`
 - `APP_PREVIEW_READ_ONLY` (optional, default `false`)
 - `OBSERVABILITY_WEBHOOK_URL` (optional, error event sink)
+- Optional UI rollout toggles:
+  - `NEXT_PUBLIC_UI_REDESIGN_ENABLED`
+  - `NEXT_PUBLIC_UI_FLAG_PUBLIC_AUTH`
+  - `NEXT_PUBLIC_UI_FLAG_HOME_ME`
+  - `NEXT_PUBLIC_UI_FLAG_ONBOARDING_RESULTS`
+  - `NEXT_PUBLIC_UI_FLAG_DISCOVER`
+  - `NEXT_PUBLIC_UI_FLAG_MATCHES`
+  - `NEXT_PUBLIC_UI_FLAG_GUEST_SNAPSHOT`
+- Optional UX telemetry toggles:
+  - `NEXT_PUBLIC_UX_TELEMETRY_ENABLED`
+  - `UX_TELEMETRY_ENABLED`
 - Optional local dev fallback toggle:
   - `ALLOW_LOCAL_FALLBACK=true`
 
@@ -104,6 +115,7 @@ Copy `.env.example` to `.env.local` and set:
 - `POST /api/auth/register`
 - `POST /api/auth/login`
 - `POST /api/auth/logout`
+- `POST /api/telemetry/ux`
 - `POST /api/onboarding/complete`
 - `GET /api/matches/preview`
 - `POST /api/matches/calibration`
@@ -143,6 +155,10 @@ Copy `.env.example` to `.env.local` and set:
   - `middleware.ts` injects/propagates `x-request-id` for all `/api/*` requests.
   - Protected routes log `user_id` context after session resolution.
   - Logs intentionally exclude secrets, raw tokens, and encrypted payloads.
+- Frontend UX telemetry:
+  - Client emits lightweight events to `POST /api/telemetry/ux`.
+  - Server logs events as structured `ux_event` lines.
+  - Disable with `NEXT_PUBLIC_UX_TELEMETRY_ENABLED=false` (client) and/or `UX_TELEMETRY_ENABLED=false` (server).
 - Health endpoint:
   - `GET /api/health` checks app boot path + lightweight DB connectivity (`db.ping()`).
   - Returns `200` with `{ status: "ok", app: "ok", db: "ok" }` when healthy.

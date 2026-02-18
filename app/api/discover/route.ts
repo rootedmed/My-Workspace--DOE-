@@ -31,6 +31,11 @@ type CandidatePayload = {
   watchForInsight: string;
   likedYou: boolean;
   understandingMatch: IncompatibilityReport | null;
+  displayMeta: {
+    primaryLabel: string;
+    secondaryLabel: string;
+    tagline: string;
+  };
 };
 
 const scoreLabel: Record<string, string> = {
@@ -81,6 +86,31 @@ function toInsights(current: OnboardingProfile, candidate: OnboardingProfile): {
   };
 }
 
+function asConflictPace(value: number | undefined): "talk-now" | "balanced" | "space-first" | "" {
+  if (typeof value !== "number") return "";
+  if (value <= 2) return "talk-now";
+  if (value >= 4) return "space-first";
+  return "balanced";
+}
+
+function visionLabel(value: string | undefined): string {
+  if (value === "independent") return "Independent together";
+  if (value === "enmeshed") return "Deeply intertwined";
+  if (value === "friendship") return "Best-friend foundation";
+  if (value === "safe") return "Safe harbour";
+  if (value === "adventure") return "Shared adventure";
+  return "Relationship-first";
+}
+
+function energyLabel(value: string | undefined): string {
+  if (value === "introspective") return "Calm and introspective energy";
+  if (value === "high_energy") return "High-energy lifestyle";
+  if (value === "social") return "Social and lighthearted vibe";
+  if (value === "intellectual") return "Curious and thoughtful rhythm";
+  if (value === "spontaneous") return "Spontaneous go-with-the-flow style";
+  return "Balanced relationship energy";
+}
+
 export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user?.id) {
@@ -91,6 +121,9 @@ export async function GET(request: Request) {
   const url = new URL(request.url);
   const lookingForFilter = url.searchParams.get("lookingFor")?.trim() || "";
   const locationFilter = url.searchParams.get("locationPreference")?.trim() || "";
+  const visionFilter = url.searchParams.get("vision")?.trim() || "";
+  const energyFilter = url.searchParams.get("energy")?.trim() || "";
+  const conflictPaceFilter = (url.searchParams.get("conflict_pace")?.trim() || "").replace("_", "-");
 
   const [currentProfileRes, profilesRes, mySwipesRes, incomingLikesRes, revealedPrefsRes, weightsRes] = await Promise.all([
     supabase
@@ -177,6 +210,16 @@ export async function GET(request: Request) {
   const filtered = allCandidates.filter((candidate) => {
     if (lookingForFilter && candidate.intent.lookingFor !== lookingForFilter) return false;
     if (locationFilter && candidate.locationPreference !== locationFilter) return false;
+    const compatibility = compatibilityProfileByCandidateId.get(candidate.id);
+    if (visionFilter && compatibility?.relationship_vision !== visionFilter) return false;
+    if (energyFilter) {
+      const fullProfile = fullCompatibilityByCandidateId.get(candidate.id);
+      if (fullProfile?.lifestyle_energy !== energyFilter) return false;
+    }
+    if (conflictPaceFilter) {
+      const pace = asConflictPace(compatibility?.conflict_speed);
+      if (pace !== conflictPaceFilter) return false;
+    }
     return true;
   });
 
@@ -273,6 +316,13 @@ export async function GET(request: Request) {
       candidate.firstName,
       scored.totalScore
     );
+    const counterpartFull = fullCompatibilityByCandidateId.get(candidate.id);
+    const compatibility = compatibilityProfileByCandidateId.get(candidate.id);
+    const primaryLabel = `${candidate.firstName}, ${candidate.ageRange.replace("_", "-")}`;
+    const secondaryLabel = `${candidate.locationPreference.replace("_", " ")} · ${candidate.intent.lookingFor.replace("_", " ")}`;
+    const tagline =
+      understandingMatch?.whatWillFeelEasy[0] ??
+      `${visionLabel(compatibility?.relationship_vision)} · ${energyLabel(counterpartFull?.lifestyle_energy)}`;
     return {
       id: candidate.id,
       firstName: candidate.firstName,
@@ -282,7 +332,12 @@ export async function GET(request: Request) {
       compatibilityHighlight: insight.highlight,
       watchForInsight: insight.watchFor,
       likedYou: incomingLikeIds.has(candidate.id),
-      understandingMatch
+      understandingMatch,
+      displayMeta: {
+        primaryLabel,
+        secondaryLabel,
+        tagline
+      }
     };
   };
 
@@ -299,7 +354,13 @@ export async function GET(request: Request) {
         candidates: [],
         incomingLikes,
         emptyReason: "Invite a friend to test",
-        filters: { lookingFor: lookingForFilter, locationPreference: locationFilter }
+        filters: {
+          lookingFor: lookingForFilter,
+          locationPreference: locationFilter,
+          vision: visionFilter,
+          energy: energyFilter,
+          conflict_pace: conflictPaceFilter
+        }
       },
       { status: 200 }
     );
@@ -309,7 +370,13 @@ export async function GET(request: Request) {
     candidates,
     incomingLikes,
     emptyReason: null,
-    filters: { lookingFor: lookingForFilter, locationPreference: locationFilter }
+    filters: {
+      lookingFor: lookingForFilter,
+      locationPreference: locationFilter,
+      vision: visionFilter,
+      energy: energyFilter,
+      conflict_pace: conflictPaceFilter
+    }
   }, { status: 200 });
 }
 

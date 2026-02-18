@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { trackUxEvent } from "@/lib/observability/uxClient";
 
 type SnapshotPayload = {
   attachmentStyle: string;
@@ -74,33 +75,33 @@ export function ShareSnapshotButton({ data, appName }: { data: SnapshotPayload; 
       }
 
       const gradient = ctx.createLinearGradient(0, 0, canvas.width, canvas.height);
-      gradient.addColorStop(0, "#1F2B3C");
-      gradient.addColorStop(0.5, "#B86A57");
-      gradient.addColorStop(1, "#E6C88E");
+      gradient.addColorStop(0, "#F4E4D3");
+      gradient.addColorStop(0.55, "#E6B694");
+      gradient.addColorStop(1, "#BA4E3D");
       ctx.fillStyle = gradient;
       ctx.fillRect(0, 0, canvas.width, canvas.height);
 
       ctx.fillStyle = "rgba(255,255,255,0.92)";
       ctx.fillRect(90, 120, canvas.width - 180, canvas.height - 260);
 
-      ctx.fillStyle = "#3A2B24";
-      ctx.font = "700 40px 'Avenir Next', 'Segoe UI', sans-serif";
+      ctx.fillStyle = "#2E2A27";
+      ctx.font = "700 52px Fraunces, Georgia, serif";
       ctx.fillText("Your Relationship DNA", 140, 260);
 
       let cursorY = 350;
       for (const [label, value] of rows) {
-        ctx.fillStyle = "#6B5A52";
-        ctx.font = "600 28px 'Avenir Next', 'Segoe UI', sans-serif";
+        ctx.fillStyle = "#7A6155";
+        ctx.font = "600 28px 'Plus Jakarta Sans', 'Segoe UI', sans-serif";
         ctx.fillText(label, 140, cursorY);
 
-        ctx.fillStyle = "#201916";
-        ctx.font = "700 46px 'Avenir Next', 'Segoe UI', sans-serif";
+        ctx.fillStyle = "#1F2329";
+        ctx.font = "700 44px 'Plus Jakarta Sans', 'Segoe UI', sans-serif";
         cursorY = wrapText(ctx, value, 140, cursorY + 66, canvas.width - 280, 58);
         cursorY += 24;
       }
 
-      ctx.fillStyle = "rgba(32,25,22,0.48)";
-      ctx.font = "500 18px 'Avenir Next', 'Segoe UI', sans-serif";
+      ctx.fillStyle = "rgba(31,35,41,0.5)";
+      ctx.font = "500 18px 'Plus Jakarta Sans', 'Segoe UI', sans-serif";
       ctx.fillText(`Built on ${appName}`, 140, canvas.height - 140);
 
       const blob = await canvasToBlob(canvas);
@@ -118,6 +119,7 @@ export function ShareSnapshotButton({ data, appName }: { data: SnapshotPayload; 
           if (!("canShare" in navigator) || navigator.canShare(sharePayload)) {
             await navigator.share(sharePayload);
             setMessage("Snapshot shared.");
+            trackUxEvent("results_snapshot_shared_native");
             return;
           }
         } catch {
@@ -132,8 +134,10 @@ export function ShareSnapshotButton({ data, appName }: { data: SnapshotPayload; 
       anchor.click();
       URL.revokeObjectURL(url);
       setMessage("Snapshot downloaded.");
+      trackUxEvent("results_snapshot_downloaded");
     } catch (error) {
       setMessage(error instanceof Error ? error.message : "Could not share snapshot.");
+      trackUxEvent("results_snapshot_share_failed");
     } finally {
       setIsWorking(false);
     }

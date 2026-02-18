@@ -1,8 +1,9 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { type CSSProperties, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
 import { withCsrfHeaders } from "@/components/auth/csrf";
+import { trackUxEvent } from "@/lib/observability/uxClient";
 import {
   deriveAttachmentAxis,
   deriveReadinessScore,
@@ -68,7 +69,7 @@ const questions: Array<QuestionDef<string | number>> = [
   {
     id: "past_attribution",
     dimension: "Past Reflection",
-    dimensionColor: "#C4865A",
+    dimensionColor: "#BA4E3D",
     prompt: "First question. When a past relationship ended, what was really going on?",
     question: "When a past relationship ended, what do you feel was the core issue?",
     type: "cards",
@@ -79,13 +80,13 @@ const questions: Array<QuestionDef<string | number>> = [
       { label: "Need for space", desc: "I needed more independence", value: "autonomy" },
       { label: "Timing & life", desc: "External circumstances got in the way", value: "external" }
     ],
-    insight: "This reveals how you interpret your past — a window into growth and self-awareness."
+    insight: "This reveals how you interpret your past, which is a direct signal of growth readiness."
   },
   {
     id: "conflict_speed",
     dimension: "Conflict Style",
-    dimensionColor: "#D4607A",
-    prompt: "Let's talk about fighting. Everyone does it — the question is how.",
+    dimensionColor: "#AF6B2D",
+    prompt: "Let's talk about fighting. Everyone does it - the question is how.",
     question: "In a disagreement with someone you love, what do you tend to do first?",
     type: "spectrum",
     leftLabel: "Talk it through immediately",
@@ -97,13 +98,13 @@ const questions: Array<QuestionDef<string | number>> = [
       { label: "Step back", value: 4, desc: "I usually need a beat before I can engage well" },
       { label: "Space first", value: 5, desc: "I need significant time alone before I can talk" }
     ],
-    insight: "Conflict style compatibility is one of the strongest predictors of relationship success."
+    insight: "Conflict style compatibility is one of the strongest predictors of relationship durability."
   },
   {
     id: "love_expression",
     dimension: "Love Expression",
-    dimensionColor: "#A06BB8",
-    prompt: "How do you show someone you love them? (Not what you think you should say — what you actually do.)",
+    dimensionColor: "#2E8E65",
+    prompt: "How do you show someone you love them? Not what you should say - what you naturally do.",
     question: "How do you naturally express love to someone you care about?",
     type: "rank",
     options: [
@@ -115,13 +116,13 @@ const questions: Array<QuestionDef<string | number>> = [
     ],
     instruction: "Pick your top 2",
     maxSelect: 2,
-    insight: "We match on expression patterns and emotional responsiveness, not just language labels."
+    insight: "We match on expression patterns and emotional responsiveness, not just labels."
   },
   {
     id: "support_need",
     dimension: "Support Needs",
-    dimensionColor: "#5A8FC4",
-    prompt: "When life gets hard and you're stressed, what do you need from a partner?",
+    dimensionColor: "#4A7A8D",
+    prompt: "When life gets hard and stress spikes, what do you need most from your partner?",
     question: "When you're stressed or going through something hard, what do you need from a partner?",
     type: "cards",
     options: [
@@ -131,17 +132,17 @@ const questions: Array<QuestionDef<string | number>> = [
       { label: "Give me space", desc: "Then gently check in later", value: "space" },
       { label: "Distract me", desc: "Help me get out of my head", value: "distraction" }
     ],
-    insight: "Support style mismatch breaks couples who deeply love each other."
+    insight: "Support mismatch can create friction even when emotional chemistry is strong."
   },
   {
     id: "emotional_openness",
     dimension: "Emotional Openness",
-    dimensionColor: "#6BA89E",
-    prompt: "Real talk: How comfortable are you with emotional vulnerability in a relationship?",
+    dimensionColor: "#8D6B4F",
+    prompt: "Real talk: how comfortable are you with emotional vulnerability in a relationship?",
     question: "How comfortable are you with emotional vulnerability in a relationship?",
     type: "spectrum",
-    leftLabel: "Very open — I share deeply",
-    rightLabel: "More private — I keep things close",
+    leftLabel: "Very open - I share deeply",
+    rightLabel: "More private - I keep things close",
     options: [
       { label: "Very open", value: 1, desc: "I share naturally and crave emotional depth" },
       { label: "Open with trust", value: 2, desc: "I open up slowly but fully once safe" },
@@ -149,13 +150,13 @@ const questions: Array<QuestionDef<string | number>> = [
       { label: "Selective", value: 4, desc: "I'm private but can open up with the right person" },
       { label: "Self-contained", value: 5, desc: "I prefer to manage most emotions internally" }
     ],
-    insight: "Emotional availability explains more relationship satisfaction than any other single factor."
+    insight: "Emotional availability is one of the most powerful predictors of relationship satisfaction."
   },
   {
     id: "relationship_vision",
     dimension: "Relationship Vision",
-    dimensionColor: "#C4A85A",
-    prompt: "What does a truly healthy relationship look like to you — not in theory, in everyday life?",
+    dimensionColor: "#E06A56",
+    prompt: "What does a healthy relationship look like to you in ordinary everyday life?",
     question: "What does a truly healthy relationship look like to you in everyday life?",
     type: "cards",
     options: [
@@ -163,16 +164,16 @@ const questions: Array<QuestionDef<string | number>> = [
       { label: "Deeply intertwined", desc: "Each other's anchor through everything", value: "enmeshed" },
       { label: "Best friendship", desc: "Deep friendship with romantic depth", value: "friendship" },
       { label: "Safe harbour", desc: "A calm, peaceful space from the world", value: "safe" },
-      { label: "Shared adventure", desc: "Growing, building, exploring together", value: "adventure" }
+      { label: "Shared adventure", desc: "Growing, building, and exploring together", value: "adventure" }
     ],
-    insight: "Goal alignment predicts relationship success above personality compatibility."
+    insight: "Goal alignment predicts long-term success more than surface-level personality matching."
   },
   {
     id: "relational_strengths",
     dimension: "Self-Awareness",
-    dimensionColor: "#8FA65A",
+    dimensionColor: "#6F7B56",
     prompt:
-      "Looking back, what did you bring to past relationships that you're genuinely proud of? (And don't say nothing — we won't believe you.)",
+      "What did you bring to past relationships that you're genuinely proud of? And don't say nothing - we won't believe you.",
     question: "Looking back, what did you bring to past relationships that you're genuinely proud of?",
     type: "rank",
     options: [
@@ -184,13 +185,13 @@ const questions: Array<QuestionDef<string | number>> = [
     ],
     instruction: "Pick your top 2",
     maxSelect: 2,
-    insight: "Self-compassion is a significant predictor of relationship quality for both partners."
+    insight: "Self-compassion and self-awareness are both linked to stronger partnerships."
   },
   {
     id: "growth_intention",
     dimension: "Growth Intention",
-    dimensionColor: "#B86B8A",
-    prompt: "Last one. What's the one thing you most want to be different in your next relationship?",
+    dimensionColor: "#BA4E3D",
+    prompt: "Last one: what's the one thing you most want to be different next time?",
     question: "What's the one thing you most want to be different in your next relationship?",
     type: "cards",
     options: [
@@ -200,13 +201,13 @@ const questions: Array<QuestionDef<string | number>> = [
       { label: "Less conflict", desc: "More calm, more mutual respect", value: "peace" },
       { label: "Real alignment", desc: "Same vision for life and what we're building", value: "alignment" }
     ],
-    insight: "This is your growth signal — it tells us exactly what you've learned and what you're ready for."
+    insight: "This is your growth signal and helps us weight what matters most for your next chapter."
   },
   {
     id: "lifestyle_energy",
     dimension: "Lifestyle",
-    dimensionColor: "#C4865A",
-    prompt: "Bonus question: If your ideal Saturday night was a movie genre, what would it be?",
+    dimensionColor: "#2E8E65",
+    prompt: "Bonus question: if your ideal Saturday night was a movie genre, what would it be?",
     question: "If your ideal Saturday night was a movie genre, what would it be?",
     type: "cards",
     options: [
@@ -216,307 +217,16 @@ const questions: Array<QuestionDef<string | number>> = [
       { label: "Documentary deep-dive", desc: "Curious, learning-focused, engaged", value: "intellectual" },
       { label: "Whatever's playing", desc: "Spontaneous, go-with-the-flow, adaptable", value: "spontaneous" }
     ],
-    insight: "This helps us match you with people whose energy level fits yours.",
+    insight: "Lifestyle pace is a major compatibility layer that often gets ignored on dating apps.",
     isBonus: true
   }
 ];
 
-function ProgressBar({ current, total }: { current: number; total: number }) {
-  const pct = (current / total) * 100;
-  return (
-    <div style={{ position: "fixed", top: 0, left: 0, right: 0, zIndex: 100 }}>
-      <div style={{ height: "3px", background: "rgba(255,255,255,0.08)" }}>
-        <div
-          style={{
-            height: "100%",
-            width: `${pct}%`,
-            background: "linear-gradient(90deg, #C4865A, #D4607A, #A06BB8)",
-            transition: "width 0.6s cubic-bezier(0.4,0,0.2,1)"
-          }}
-        />
-      </div>
-    </div>
-  );
-}
-
-function DimensionPill({ label, color }: { label: string; color: string }) {
-  return (
-    <div
-      style={{
-        display: "inline-flex",
-        alignItems: "center",
-        gap: "6px",
-        padding: "4px 12px",
-        borderRadius: "20px",
-        background: `${color}20`,
-        border: `1px solid ${color}50`,
-        color,
-        fontSize: "11px",
-        fontFamily: "'DM Sans', sans-serif",
-        fontWeight: 600,
-        letterSpacing: "0.08em",
-        textTransform: "uppercase",
-        marginBottom: "20px"
-      }}
-    >
-      <div style={{ width: 6, height: 6, borderRadius: "50%", background: color }} />
-      {label}
-    </div>
-  );
-}
-
-function CardOption({
-  option,
-  selected,
-  onClick,
-  disabled
-}: {
-  option: QuestionOption<string | number>;
-  selected: boolean;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      onClick={onClick}
-      disabled={Boolean(disabled && !selected)}
-      style={{
-        background: selected ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.04)",
-        border: selected ? "1px solid rgba(255,255,255,0.35)" : "1px solid rgba(255,255,255,0.08)",
-        borderRadius: "14px",
-        padding: "14px 18px",
-        cursor: disabled && !selected ? "not-allowed" : "pointer",
-        transition: "all 0.2s ease",
-        textAlign: "left",
-        display: "flex",
-        alignItems: "center",
-        gap: "14px",
-        opacity: disabled && !selected ? 0.4 : 1,
-        transform: selected ? "scale(1.01)" : "scale(1)",
-        width: "100%"
-      }}
-    >
-      <div>
-        <div
-          style={{
-            fontFamily: "'DM Sans', sans-serif",
-            fontWeight: 600,
-            fontSize: "14px",
-            color: selected ? "#fff" : "rgba(255,255,255,0.85)",
-            marginBottom: "2px"
-          }}
-        >
-          {option.label}
-        </div>
-        <div
-          style={{
-            fontFamily: "'DM Sans', sans-serif",
-            fontSize: "12px",
-            color: "rgba(255,255,255,0.45)",
-            lineHeight: 1.4
-          }}
-        >
-          {option.desc}
-        </div>
-      </div>
-      {selected ? (
-        <div
-          style={{
-            marginLeft: "auto",
-            flexShrink: 0,
-            width: 20,
-            height: 20,
-            borderRadius: "50%",
-            background: "#fff",
-            display: "flex",
-            alignItems: "center",
-            justifyContent: "center"
-          }}
-        />
-      ) : null}
-    </button>
-  );
-}
-
-function SpectrumQuestion({
-  q,
-  value,
-  onChange
-}: {
-  q: QuestionDef<string | number>;
-  value?: number;
-  onChange: (value: number) => void;
-}) {
-  return (
-    <div>
-      <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "14px" }}>
-        <span
-          style={{
-            fontSize: "11px",
-            color: "rgba(255,255,255,0.4)",
-            fontFamily: "'DM Sans', sans-serif",
-            maxWidth: "40%"
-          }}
-        >
-          {q.leftLabel}
-        </span>
-        <span
-          style={{
-            fontSize: "11px",
-            color: "rgba(255,255,255,0.4)",
-            fontFamily: "'DM Sans', sans-serif",
-            textAlign: "right",
-            maxWidth: "40%"
-          }}
-        >
-          {q.rightLabel}
-        </span>
-      </div>
-      <div style={{ display: "flex", gap: "10px", marginBottom: "20px" }}>
-        {q.options.map((opt) => (
-          <button
-            key={`${q.id}-${String(opt.value)}`}
-            type="button"
-            onClick={() => onChange(Number(opt.value))}
-            style={{
-              flex: 1,
-              padding: "14px 4px",
-              borderRadius: "12px",
-              border:
-                value === Number(opt.value)
-                  ? "1px solid rgba(255,255,255,0.4)"
-                  : "1px solid rgba(255,255,255,0.08)",
-              background: value === Number(opt.value) ? "rgba(255,255,255,0.12)" : "rgba(255,255,255,0.03)",
-              cursor: "pointer",
-              transition: "all 0.2s ease",
-              display: "flex",
-              flexDirection: "column",
-              alignItems: "center",
-              gap: "8px"
-            }}
-          >
-            <div
-              style={{
-                width: 28,
-                height: 28,
-                borderRadius: "50%",
-                background: value === Number(opt.value) ? q.dimensionColor : "rgba(255,255,255,0.08)",
-                transition: "all 0.2s ease",
-                display: "flex",
-                alignItems: "center",
-                justifyContent: "center",
-                fontSize: "12px",
-                fontWeight: 700,
-                color: "#fff",
-                fontFamily: "'DM Sans', sans-serif"
-              }}
-            >
-              {opt.value}
-            </div>
-          </button>
-        ))}
-      </div>
-      {value ? (
-        <div
-          style={{
-            background: "rgba(255,255,255,0.05)",
-            borderRadius: "12px",
-            padding: "14px 16px",
-            border: "1px solid rgba(255,255,255,0.08)"
-          }}
-        >
-          <div style={{ fontFamily: "'DM Sans', sans-serif", fontSize: "13px", color: "rgba(255,255,255,0.7)" }}>
-            {q.options.find((o) => Number(o.value) === value)?.desc}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
-function RankQuestion({
-  q,
-  selected,
-  onToggle
-}: {
-  q: QuestionDef<string | number>;
-  selected: string[];
-  onToggle: (value: string) => void;
-}) {
-  const max = q.maxSelect || 2;
-  return (
-    <div>
-      <div
-        style={{
-          marginBottom: "12px",
-          fontFamily: "'DM Sans', sans-serif",
-          fontSize: "12px",
-          color: "rgba(255,255,255,0.4)",
-          display: "flex",
-          alignItems: "center",
-          gap: "8px"
-        }}
-      >
-        <span
-          style={{
-            background: selected.length >= max ? "rgba(255,255,255,0.1)" : "rgba(255,255,255,0.05)",
-            borderRadius: "20px",
-            padding: "3px 10px",
-            color: selected.length >= max ? "#fff" : "rgba(255,255,255,0.4)"
-          }}
-        >
-          {selected.length}/{max} selected
-        </span>
-        {q.instruction}
-      </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-        {q.options.map((opt) => {
-          const optValue = String(opt.value);
-          const isSelected = selected.includes(optValue);
-          const isDisabled = !isSelected && selected.length >= max;
-          return (
-            <CardOption
-              key={`${q.id}-${optValue}`}
-              option={opt}
-              selected={isSelected}
-              onClick={() => onToggle(optValue)}
-              disabled={isDisabled}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function InsightBubble({ text }: { text: string }) {
-  return (
-    <div
-      style={{
-        marginTop: "16px",
-        background: "rgba(255,255,255,0.04)",
-        border: "1px solid rgba(255,255,255,0.07)",
-        borderRadius: "10px",
-        padding: "10px 14px",
-        display: "flex",
-        gap: "10px",
-        alignItems: "flex-start"
-      }}
-    >
-      <div
-        style={{
-          fontFamily: "'DM Sans', sans-serif",
-          fontSize: "11.5px",
-          color: "rgba(255,255,255,0.38)",
-          lineHeight: 1.6,
-          fontStyle: "italic"
-        }}
-      >
-        {text}
-      </div>
-    </div>
-  );
+function hasAnswer(answer: OnboardingAnswers[keyof OnboardingAnswers] | undefined): boolean {
+  if (Array.isArray(answer)) {
+    return answer.length > 0;
+  }
+  return answer !== undefined && answer !== null;
 }
 
 function getLivePreviewText(answers: OnboardingAnswers): string {
@@ -537,177 +247,146 @@ function getLivePreviewText(answers: OnboardingAnswers): string {
   return `Based on your answers so far, you're most compatible with people who ${traits[0]} and ${traits[1]}.`;
 }
 
-function LivePreview({ text }: { text: string }) {
+function DimensionPill({ label, color }: { label: string; color: string }) {
   return (
-    <div
-      style={{
-        marginTop: "14px",
-        background: "rgba(196, 134, 90, 0.14)",
-        border: "1px solid rgba(196, 134, 90, 0.35)",
-        borderRadius: "12px",
-        padding: "12px 14px",
-        fontFamily: "'DM Sans', sans-serif",
-        fontSize: "12px",
-        color: "rgba(255,255,255,0.82)",
-        lineHeight: 1.5
-      }}
-    >
-      {text} Let&apos;s keep going.
+    <div className="onboarding-dimension-pill" style={{ "--dimension-color": color } as CSSProperties}>
+      <span className="onboarding-dimension-dot" aria-hidden="true" />
+      {label}
     </div>
   );
 }
 
-function SummaryScreen({
-  profile,
-  onContinue
+function CardOption({
+  option,
+  selected,
+  onClick,
+  disabled = false
 }: {
-  profile: UserCompatibilityProfile;
-  onContinue: () => void;
+  option: QuestionOption<string | number>;
+  selected: boolean;
+  onClick: () => void;
+  disabled?: boolean;
 }) {
-  const dims = [
-    {
-      label: "Attachment Profile",
-      score: Math.max(0, 100 - Math.abs(profile.emotional_openness - 3) * 18),
-      color: "#A06BB8",
-      q: "Q3, Q4, Q5"
-    },
-    {
-      label: "Conflict & Communication",
-      score: Math.max(0, 100 - Math.abs(profile.conflict_speed - 3) * 18),
-      color: "#D4607A",
-      q: "Q1, Q2"
-    },
-    {
-      label: "Relational Vision",
-      score: profile.readiness_score,
-      color: "#6BA89E",
-      q: "Q6, Q7, Q8, Q9"
-    }
-  ];
+  return (
+    <button
+      type="button"
+      className={`onboarding-option${selected ? " active" : ""}`}
+      onClick={onClick}
+      disabled={disabled && !selected}
+      aria-pressed={selected}
+    >
+      <span className="onboarding-option-content">
+        <strong>{option.label}</strong>
+        <span>{option.desc}</span>
+      </span>
+      <span className={`onboarding-option-check${selected ? " active" : ""}`} aria-hidden="true" />
+    </button>
+  );
+}
+
+function SpectrumQuestion({
+  q,
+  value,
+  onChange
+}: {
+  q: QuestionDef<string | number>;
+  value?: number;
+  onChange: (value: number) => void;
+}) {
+  const selected = q.options.find((opt) => Number(opt.value) === value);
 
   return (
-    <div
-      style={{
-        minHeight: "100vh",
-        background: "#0f0e0e",
-        display: "flex",
-        flexDirection: "column",
-        alignItems: "center",
-        justifyContent: "center",
-        padding: "40px 24px",
-        textAlign: "center"
-      }}
-    >
-      <div style={{ maxWidth: 420, width: "100%" }}>
-        <h1
-          style={{
-            fontFamily: "'DM Serif Display', Georgia, serif",
-            fontSize: "32px",
-            color: "#fff",
-            fontWeight: 400,
-            margin: "0 0 12px 0",
-            lineHeight: 1.2
-          }}
-        >
-          Your compatibility
-          <br />
-          profile is ready.
-        </h1>
-        <p
-          style={{
-            fontFamily: "'DM Sans', sans-serif",
-            fontSize: "14px",
-            color: "rgba(255,255,255,0.4)",
-            marginBottom: "40px"
-          }}
-        >
-          Here&apos;s what we learned about you across three dimensions.
-        </p>
+    <div className="onboarding-spectrum">
+      <div className="onboarding-spectrum-labels">
+        <span>{q.leftLabel}</span>
+        <span>{q.rightLabel}</span>
+      </div>
+      <div className="onboarding-spectrum-grid" role="radiogroup" aria-label={q.question}>
+        {q.options.map((opt) => {
+          const optionValue = Number(opt.value);
+          const isSelected = value === optionValue;
+          return (
+            <button
+              key={`${q.id}-${String(opt.value)}`}
+              type="button"
+              role="radio"
+              aria-checked={isSelected}
+              className={`onboarding-scale-button${isSelected ? " active" : ""}`}
+              onClick={() => onChange(optionValue)}
+            >
+              <span className="onboarding-scale-number">{opt.value}</span>
+              <span className="onboarding-scale-label">{opt.label}</span>
+            </button>
+          );
+        })}
+      </div>
+      {selected ? <p className="onboarding-helper">{selected.desc}</p> : null}
+    </div>
+  );
+}
 
-        {dims.map((d) => (
-          <div
-            key={d.label}
-            style={{
-              background: "rgba(255,255,255,0.04)",
-              borderRadius: "14px",
-              padding: "18px 20px",
-              marginBottom: "12px",
-              border: "1px solid rgba(255,255,255,0.07)",
-              textAlign: "left"
-            }}
-          >
-            <div style={{ display: "flex", justifyContent: "space-between", marginBottom: "10px" }}>
-              <div>
-                <div
-                  style={{
-                    fontFamily: "'DM Sans', sans-serif",
-                    fontWeight: 600,
-                    fontSize: "13px",
-                    color: "#fff"
-                  }}
-                >
-                  {d.label}
-                </div>
-                <div
-                  style={{
-                    fontFamily: "'DM Sans', sans-serif",
-                    fontSize: "11px",
-                    color: "rgba(255,255,255,0.3)",
-                    marginTop: "2px"
-                  }}
-                >
-                  From {d.q}
-                </div>
-              </div>
-              <div style={{ fontFamily: "'DM Serif Display', serif", fontSize: "22px", color: d.color }}>
-                {Math.round(d.score)}
-              </div>
-            </div>
-            <div style={{ height: "4px", background: "rgba(255,255,255,0.06)", borderRadius: "2px" }}>
-              <div
-                style={{
-                  height: "100%",
-                  width: `${Math.round(d.score)}%`,
-                  background: d.color,
-                  borderRadius: "2px",
-                  transition: "width 1s ease"
-                }}
-              />
-            </div>
-          </div>
-        ))}
-
-        <button
-          type="button"
-          onClick={onContinue}
-          style={{
-            width: "100%",
-            marginTop: "20px",
-            background: "linear-gradient(135deg, #C4865A, #D4607A, #A06BB8)",
-            border: "none",
-            borderRadius: "14px",
-            padding: "16px",
-            color: "#fff",
-            fontFamily: "'DM Sans', sans-serif",
-            fontSize: "15px",
-            fontWeight: 700,
-            cursor: "pointer",
-            letterSpacing: "0.02em",
-            boxShadow: "0 8px 32px rgba(196, 134, 90, 0.3)"
-          }}
-        >
-          Find my matches
-        </button>
+function RankQuestion({
+  q,
+  selected,
+  onToggle
+}: {
+  q: QuestionDef<string | number>;
+  selected: string[];
+  onToggle: (value: string) => void;
+}) {
+  const max = q.maxSelect || 2;
+  return (
+    <div className="stack">
+      <p className="onboarding-helper">
+        <strong>{selected.length}/{max}</strong> selected{q.instruction ? ` - ${q.instruction}` : ""}
+      </p>
+      <div className="stack">
+        {q.options.map((opt) => {
+          const value = String(opt.value);
+          const isSelected = selected.includes(value);
+          const isDisabled = !isSelected && selected.length >= max;
+          return (
+            <CardOption
+              key={`${q.id}-${value}`}
+              option={opt}
+              selected={isSelected}
+              onClick={() => onToggle(value)}
+              disabled={isDisabled}
+            />
+          );
+        })}
       </div>
     </div>
   );
 }
 
-function hasAnswer(answer: OnboardingAnswers[keyof OnboardingAnswers] | undefined): boolean {
-  if (Array.isArray(answer)) {
-    return answer.length > 0;
-  }
-  return answer !== undefined && answer !== null;
+function SummaryScreen({ onContinue }: { onContinue: () => void }) {
+  return (
+    <section className="onboarding-summary panel stack">
+      <p className="eyebrow">Your Relationship DNA</p>
+      <h1>Your profile is complete.</h1>
+      <p className="muted">
+        We now have enough signal to show matches with meaningful fit and clear coaching guidance.
+      </p>
+      <div className="onboarding-summary-grid">
+        <article className="prompt-card">
+          <h3>Emotional style</h3>
+          <p className="small">Matched on openness rhythm, support needs, and attachment pacing.</p>
+        </article>
+        <article className="prompt-card">
+          <h3>Conflict rhythm</h3>
+          <p className="small">You will see where conflict speed naturally aligns and where it needs structure.</p>
+        </article>
+        <article className="prompt-card">
+          <h3>Life direction</h3>
+          <p className="small">Vision and growth intent are prioritized over shallow profile noise.</p>
+        </article>
+      </div>
+      <div className="actions">
+        <button type="button" onClick={onContinue}>Find my matches</button>
+      </div>
+    </section>
+  );
 }
 
 export function OnboardingFlow({
@@ -725,8 +404,7 @@ export function OnboardingFlow({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const q = questions[currentQ]!;
-
+  const q = questions[currentQ] ?? questions[0]!;
   const readyForNext = hasAnswer(answers[q.id]);
 
   const completedProfile = useMemo<UserCompatibilityProfile | null>(() => {
@@ -816,6 +494,11 @@ export function OnboardingFlow({
     };
   }, []);
 
+  useEffect(() => {
+    if (loading) return;
+    trackUxEvent("onboarding_step_viewed", { step: currentQ + 1 });
+  }, [currentQ, loading]);
+
   function handleAnswer(value: string | number | string[]) {
     setAnswers((prev) => ({ ...prev, [q.id]: value }));
   }
@@ -851,6 +534,7 @@ export function OnboardingFlow({
     try {
       const nextStep = Math.min(questions.length, currentQ + 2);
       await persistStep(nextStep, value as string | number | string[]);
+      trackUxEvent("onboarding_step_saved", { step: currentQ + 1 });
 
       if (currentQ < questions.length - 1) {
         setCurrentQ((prev) => prev + 1);
@@ -892,6 +576,7 @@ export function OnboardingFlow({
       }
 
       onComplete?.(completedProfile);
+      trackUxEvent("onboarding_completed");
       router.push("/results");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not complete onboarding.");
@@ -901,232 +586,121 @@ export function OnboardingFlow({
   }
 
   async function goBack() {
-    if (currentQ > 0) {
-      const previousStep = currentQ;
-      setCurrentQ((prev) => prev - 1);
-      await fetch("/api/onboarding/progress", {
-        method: "POST",
-        headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
-        body: JSON.stringify({
-          currentStep: previousStep,
-          totalSteps: questions.length,
-          mode: "deep",
-          completed: false
-        })
-      }).catch(() => undefined);
-    }
+    if (currentQ === 0) return;
+
+    const previousStep = currentQ;
+    setCurrentQ((prev) => prev - 1);
+    await fetch("/api/onboarding/progress", {
+      method: "POST",
+      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+      body: JSON.stringify({
+        currentStep: previousStep,
+        totalSteps: questions.length,
+        mode: "deep",
+        completed: false
+      })
+    }).catch(() => undefined);
   }
 
   if (loading) {
     return (
-      <div style={{ minHeight: "100vh", background: "#0f0e0e", display: "grid", placeItems: "center", color: "#fff" }}>
-        Loading onboarding...
-      </div>
+      <main className="public-main onboarding-main">
+        <section className="panel">
+          <p className="muted">Loading onboarding...</p>
+        </section>
+      </main>
     );
   }
 
   if (done && completedProfile) {
     return (
-      <SummaryScreen
-        profile={completedProfile}
-        onContinue={() => {
-          void completeOnboarding();
-        }}
-      />
+      <main className="public-main onboarding-main">
+        <SummaryScreen
+          onContinue={() => {
+            void completeOnboarding();
+          }}
+        />
+      </main>
     );
   }
 
   return (
-    <div>
-      <ProgressBar current={currentQ + 1} total={questions.length} />
-      <div
-        style={{
-          position: "fixed",
-          top: "12px",
-          right: "16px",
-          zIndex: 101,
-          fontFamily: "'DM Sans', sans-serif",
-          fontSize: "12px",
-          color: "rgba(255,255,255,0.25)"
-        }}
-      >
-        {currentQ + 1} / {questions.length}
-      </div>
-
-      <div
-        key={q.id}
-        style={{
-          minHeight: "100vh",
-          background: "#0f0e0e",
-          display: "flex",
-          flexDirection: "column",
-          padding: "60px 24px 30px",
-          animation: "questionEnter 0.4s ease"
-        }}
-      >
-        <div style={{ maxWidth: 480, margin: "0 auto", width: "100%", flex: 1, display: "flex", flexDirection: "column" }}>
-          <DimensionPill label={q.dimension} color={q.dimensionColor} />
-
-          <div
-            style={{
-              fontFamily: "'DM Serif Display', Georgia, serif",
-              fontSize: "13px",
-              color: "rgba(255,255,255,0.35)",
-              marginBottom: "10px",
-              letterSpacing: "0.01em"
-            }}
-          >
-            {q.prompt}
+    <main className="public-main onboarding-main">
+      <section className="onboarding-shell">
+        <section className="panel onboarding-progress-panel">
+          <div className="onboarding-progress-top">
+            <p className="eyebrow">Onboarding</p>
+            <p className="tiny muted">{currentQ + 1} / {questions.length}</p>
           </div>
-          {q.isBonus ? (
-            <div
-              style={{
-                display: "inline-flex",
-                width: "fit-content",
-                marginBottom: "12px",
-                borderRadius: "999px",
-                padding: "4px 10px",
-                border: "1px solid rgba(255,255,255,0.2)",
-                background: "rgba(255,255,255,0.06)",
-                fontFamily: "'DM Sans', sans-serif",
-                fontSize: "11px",
-                color: "rgba(255,255,255,0.72)",
-                letterSpacing: "0.06em",
-                textTransform: "uppercase"
-              }}
-            >
-              Bonus Question
+          <div className="onboarding-progress-track" role="progressbar" aria-valuemin={1} aria-valuemax={questions.length} aria-valuenow={currentQ + 1}>
+            <span className="onboarding-progress-fill" style={{ width: `${((currentQ + 1) / questions.length) * 100}%` }} />
+          </div>
+        </section>
+
+        <div className="onboarding-stack-wrap" key={q.id}>
+          <div className="onboarding-stack-layer layer-one" aria-hidden="true" />
+          <div className="onboarding-stack-layer layer-two" aria-hidden="true" />
+          <section className="panel onboarding-card">
+            <DimensionPill label={q.dimension} color={q.dimensionColor} />
+            <p className="onboarding-prompt">{q.prompt}</p>
+            {q.isBonus ? <p className="onboarding-bonus">Bonus question</p> : null}
+            <h2>{q.question}</h2>
+
+            <div className="onboarding-body">
+              {q.type === "cards" ? (
+                <div className="stack">
+                  {q.options.map((opt) => (
+                    <CardOption
+                      key={`${q.id}-${String(opt.value)}`}
+                      option={opt}
+                      selected={answers[q.id] === opt.value}
+                      onClick={() => handleAnswer(String(opt.value))}
+                    />
+                  ))}
+                </div>
+              ) : null}
+
+              {q.type === "spectrum" ? (
+                <SpectrumQuestion
+                  q={q}
+                  value={answers[q.id] as number | undefined}
+                  onChange={(value) => handleAnswer(value)}
+                />
+              ) : null}
+
+              {q.type === "rank" ? (
+                <RankQuestion
+                  q={q}
+                  selected={(answers[q.id] as string[] | undefined) ?? []}
+                  onToggle={(value) => {
+                    const current = ((answers[q.id] as string[] | undefined) ?? []).slice();
+                    if (current.includes(value)) {
+                      handleAnswer(current.filter((entry) => entry !== value));
+                      return;
+                    }
+                    if (current.length < (q.maxSelect ?? 2)) {
+                      handleAnswer([...current, value]);
+                    }
+                  }}
+                />
+              ) : null}
+
+              <p className="onboarding-insight">{q.insight}</p>
+              {currentQ >= 3 ? <p className="onboarding-preview">{getLivePreviewText(answers)} Let&apos;s keep going.</p> : null}
+              {error ? <p className="onboarding-error">{error}</p> : null}
             </div>
-          ) : null}
 
-          <h2
-            style={{
-              fontFamily: "'DM Serif Display', Georgia, serif",
-              fontSize: "clamp(20px, 5vw, 26px)",
-              color: "#fff",
-              fontWeight: 400,
-              lineHeight: 1.35,
-              margin: "0 0 28px 0",
-              letterSpacing: "-0.01em"
-            }}
-          >
-            {q.question}
-          </h2>
-
-          <div style={{ flex: 1 }}>
-            {q.type === "cards" ? (
-              <div style={{ display: "flex", flexDirection: "column", gap: "8px" }}>
-                {q.options.map((opt) => (
-                  <CardOption
-                    key={`${q.id}-${String(opt.value)}`}
-                    option={opt}
-                    selected={answers[q.id] === opt.value}
-                    onClick={() => handleAnswer(String(opt.value))}
-                  />
-                ))}
-              </div>
-            ) : null}
-
-            {q.type === "spectrum" ? (
-              <SpectrumQuestion
-                q={q}
-                value={answers[q.id] as number | undefined}
-                onChange={(value) => handleAnswer(value)}
-              />
-            ) : null}
-
-            {q.type === "rank" ? (
-              <RankQuestion
-                q={q}
-                selected={(answers[q.id] as string[] | undefined) ?? []}
-                onToggle={(value) => {
-                  const current = ((answers[q.id] as string[] | undefined) ?? []).slice();
-                  if (current.includes(value)) {
-                    handleAnswer(current.filter((v) => v !== value));
-                    return;
-                  }
-                  if (current.length < (q.maxSelect ?? 2)) {
-                    handleAnswer([...current, value]);
-                  }
-                }}
-              />
-            ) : null}
-
-            <InsightBubble text={q.insight} />
-            {currentQ >= 3 ? <LivePreview text={getLivePreviewText(answers)} /> : null}
-            {error ? (
-              <p style={{ marginTop: "14px", color: "#ffb0b0", fontFamily: "'DM Sans', sans-serif", fontSize: "12px" }}>
-                {error}
-              </p>
-            ) : null}
-          </div>
-
-          <div
-            style={{
-              display: "flex",
-              justifyContent: "space-between",
-              alignItems: "center",
-              marginTop: "32px",
-              paddingTop: "20px",
-              borderTop: "1px solid rgba(255,255,255,0.06)"
-            }}
-          >
-            <button
-              type="button"
-              onClick={() => void goBack()}
-              disabled={currentQ === 0 || saving}
-              style={{
-                background: "transparent",
-                border: "1px solid rgba(255,255,255,0.12)",
-                borderRadius: "12px",
-                padding: "12px 20px",
-                color: currentQ === 0 ? "rgba(255,255,255,0.15)" : "rgba(255,255,255,0.5)",
-                fontFamily: "'DM Sans', sans-serif",
-                fontSize: "13px",
-                cursor: currentQ === 0 ? "not-allowed" : "pointer",
-                transition: "all 0.2s"
-              }}
-            >
-              Back
-            </button>
-
-            <button
-              type="button"
-              onClick={() => void goNext()}
-              disabled={!readyForNext || saving}
-              style={{
-                background: readyForNext
-                  ? `linear-gradient(135deg, ${q.dimensionColor}, ${q.dimensionColor}cc)`
-                  : "rgba(255,255,255,0.06)",
-                border: "none",
-                borderRadius: "12px",
-                padding: "12px 28px",
-                color: readyForNext ? "#fff" : "rgba(255,255,255,0.2)",
-                fontFamily: "'DM Sans', sans-serif",
-                fontSize: "13px",
-                fontWeight: 600,
-                cursor: readyForNext ? "pointer" : "not-allowed",
-                transition: "all 0.25s ease",
-                boxShadow: readyForNext ? `0 4px 20px ${q.dimensionColor}40` : "none"
-              }}
-            >
-              {saving ? "Saving..." : currentQ === questions.length - 1 ? "See my matches" : "Continue"}
-            </button>
-          </div>
+            <footer className="onboarding-footer">
+              <button type="button" className="ghost" onClick={() => void goBack()} disabled={currentQ === 0 || saving}>
+                Back
+              </button>
+              <button type="button" onClick={() => void goNext()} disabled={!readyForNext || saving}>
+                {saving ? "Saving..." : currentQ === questions.length - 1 ? "See my matches" : "Continue"}
+              </button>
+            </footer>
+          </section>
         </div>
-      </div>
-      <style jsx>{`
-        @keyframes questionEnter {
-          from {
-            opacity: 0;
-            transform: translateY(14px);
-          }
-          to {
-            opacity: 1;
-            transform: translateY(0);
-          }
-        }
-      `}</style>
-    </div>
+      </section>
+    </main>
   );
 }

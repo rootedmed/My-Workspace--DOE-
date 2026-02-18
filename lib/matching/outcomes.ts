@@ -1,4 +1,24 @@
-type SupabaseLike = any;
+type SupabaseQueryResult = {
+  error?: unknown | null;
+  data?: Record<string, unknown> | null;
+  count?: number | null;
+};
+
+type SupabaseQueryBuilder = {
+  upsert: (...args: unknown[]) => Promise<SupabaseQueryResult>;
+  update: (...args: unknown[]) => SupabaseQueryBuilder;
+  select: (...args: unknown[]) => SupabaseQueryBuilder;
+  eq: (...args: unknown[]) => SupabaseQueryBuilder;
+  maybeSingle: () => Promise<SupabaseQueryResult>;
+};
+
+type SupabaseLike = {
+  from: (table: string) => unknown;
+};
+
+function fromTable(supabase: SupabaseLike, table: string): SupabaseQueryBuilder {
+  return supabase.from(table) as SupabaseQueryBuilder;
+}
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -15,7 +35,7 @@ export async function ensureMatchOutcomeRows(
   }
 ) {
   const timestamp = nowIso();
-  await supabase.from("match_outcomes").upsert(
+  await fromTable(supabase, "match_outcomes").upsert(
     [
       {
         match_id: args.matchId,
@@ -41,7 +61,7 @@ export async function recordMatchView(
   args: { matchId: string; userId: string; matchedUserId: string }
 ) {
   const timestamp = nowIso();
-  await supabase.from("match_outcomes").upsert(
+  await fromTable(supabase, "match_outcomes").upsert(
     {
       match_id: args.matchId,
       user_id: args.userId,
@@ -64,7 +84,7 @@ export async function recordMessageOutcome(
 ) {
   const timestamp = nowIso();
 
-  await supabase.from("match_outcomes").upsert(
+  await fromTable(supabase, "match_outcomes").upsert(
     {
       match_id: args.matchId,
       user_id: args.senderId,
@@ -76,42 +96,42 @@ export async function recordMessageOutcome(
     { onConflict: "match_id,user_id" }
   );
 
-  const recipientOutcomeRes = await supabase
-    .from("match_outcomes")
+  const recipientOutcomeRes = await fromTable(supabase, "match_outcomes")
     .select("did_message, did_reply, messaged_at")
     .eq("match_id", args.matchId)
     .eq("user_id", args.recipientId)
     .maybeSingle();
+  const recipientOutcome = (recipientOutcomeRes.data ?? null) as {
+    did_message?: boolean | null;
+    did_reply?: boolean | null;
+    messaged_at?: string | null;
+  } | null;
 
-  if (!recipientOutcomeRes.error && recipientOutcomeRes.data?.did_message === true && recipientOutcomeRes.data.did_reply !== true) {
-    const messagedAt = recipientOutcomeRes.data.messaged_at ? Date.parse(String(recipientOutcomeRes.data.messaged_at)) : NaN;
+  if (!recipientOutcomeRes.error && recipientOutcome?.did_message === true && recipientOutcome.did_reply !== true) {
+    const messagedAt = recipientOutcome.messaged_at ? Date.parse(String(recipientOutcome.messaged_at)) : NaN;
     const within72Hours = Number.isFinite(messagedAt) && Date.now() - messagedAt <= 72 * 60 * 60 * 1000;
     if (within72Hours) {
-      await supabase
-        .from("match_outcomes")
+      await (fromTable(supabase, "match_outcomes")
         .update({
           did_reply: true,
           replied_at: timestamp,
           updated_at: timestamp
         })
         .eq("match_id", args.matchId)
-        .eq("user_id", args.recipientId);
+        .eq("user_id", args.recipientId) as unknown as Promise<SupabaseQueryResult>);
     }
   }
 
-  const countRes = await supabase
-    .from("match_messages")
+  const countRes = await (fromTable(supabase, "match_messages")
     .select("id", { count: "exact", head: true })
-    .eq("match_id", args.matchId);
-  const count = countRes.count ?? 0;
-  await supabase
-    .from("match_outcomes")
+    .eq("match_id", args.matchId) as unknown as Promise<SupabaseQueryResult>);
+  const count = typeof countRes.count === "number" ? countRes.count : 0;
+  await (fromTable(supabase, "match_outcomes")
     .update({ conversation_length: count, updated_at: timestamp })
     .eq("match_id", args.matchId)
-    .eq("user_id", args.senderId);
-  await supabase
-    .from("match_outcomes")
+    .eq("user_id", args.senderId) as unknown as Promise<SupabaseQueryResult>);
+  await (fromTable(supabase, "match_outcomes")
     .update({ conversation_length: count, updated_at: timestamp })
     .eq("match_id", args.matchId)
-    .eq("user_id", args.recipientId);
+    .eq("user_id", args.recipientId) as unknown as Promise<SupabaseQueryResult>);
 }

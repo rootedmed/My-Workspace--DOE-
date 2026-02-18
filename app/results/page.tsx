@@ -4,6 +4,8 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { BottomTabs } from "@/components/navigation/BottomTabs";
 import { getOnboardingV2State } from "@/lib/onboarding/v2";
 import { ShareSnapshotButton } from "@/components/results/ShareSnapshotButton";
+import { isUiRouteEnabled } from "@/lib/config/uiFlags";
+import { UiFallbackNotice } from "@/components/ui/UiFallbackNotice";
 
 type SnapshotData = {
   attachmentStyle: string;
@@ -81,6 +83,26 @@ export default async function ResultsPage() {
   const onboarding = await getOnboardingV2State(user.id);
   if (!onboarding.hasProfile || !onboarding.compatibilityProfile) {
     redirect("/onboarding");
+  }
+
+  if (!isUiRouteEnabled("onboarding_results")) {
+    return (
+      <main className="app-main">
+        <section className="app-shell">
+          <div className="app-screen stack">
+            <UiFallbackNotice
+              title="Results refresh is temporarily paused"
+              description="This visual module is currently gated while staged rollout metrics are monitored."
+              primaryHref="/discover"
+              primaryLabel="Open Discover"
+              secondaryHref="/app"
+              secondaryLabel="Back to Home"
+            />
+          </div>
+          <BottomTabs current="home" />
+        </section>
+      </main>
+    );
   }
 
   const snapshot = toSnapshotData(onboarding.compatibilityProfile, onboarding.attachmentAxis);

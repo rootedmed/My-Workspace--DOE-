@@ -54,7 +54,6 @@ export function computeRevealedPreferences(
 ): RevealedPreferencesRecord {
   const usable = outcomeRows.filter((row) => row.candidateProfile);
   const messaged = usable.filter((row) => row.did_message === true).map((row) => row.candidateProfile!);
-  const ignored = usable.filter((row) => row.did_message !== true).map((row) => row.candidateProfile!);
   const sampleSize = usable.length;
 
   const avgMessagedOpenness = mean(messaged.map((profile) => profile.emotional_openness));

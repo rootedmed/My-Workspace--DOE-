@@ -4,6 +4,8 @@ import { getCurrentUser } from "@/lib/auth/session";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
 import { isValidCsrf } from "@/lib/security/csrf";
 import { recordMatchView, recordMessageOutcome } from "@/lib/matching/outcomes";
+import { toCompatibilityProfileFromRow } from "@/lib/matching/profileParser";
+import { computeCompatibility } from "@/lib/compatibility";
 
 const paramsSchema = z.object({
   matchId: z.string().uuid()
@@ -51,7 +53,7 @@ export async function GET(_request: Request, context: { params: Promise<{ matchI
     userId: user.id,
     matchedUserId: counterpartId
   }).catch(() => undefined);
-  const [messagesRes, profileRes, photoRes] = await Promise.all([
+  const [messagesRes, profileRes, photoRes, currentProfileRes] = await Promise.all([
     supabase
       .from("match_messages")
       .select("id, match_id, sender_id, body, created_at")
@@ -59,7 +61,7 @@ export async function GET(_request: Request, context: { params: Promise<{ matchI
       .order("created_at", { ascending: true }),
     supabase
       .from("onboarding_profiles")
-      .select("first_name")
+      .select("first_name, compatibility_profile")
       .eq("user_id", counterpartId)
       .maybeSingle(),
     supabase
@@ -67,10 +69,15 @@ export async function GET(_request: Request, context: { params: Promise<{ matchI
       .select("storage_path, mime_type, image_base64")
       .eq("user_id", counterpartId)
       .eq("slot", 1)
+      .maybeSingle(),
+    supabase
+      .from("onboarding_profiles")
+      .select("user_id, compatibility_profile")
+      .eq("user_id", user.id)
       .maybeSingle()
   ]);
 
-  if (messagesRes.error || profileRes.error || photoRes.error) {
+  if (messagesRes.error || profileRes.error || photoRes.error || currentProfileRes.error) {
     return NextResponse.json({ error: "Could not load messages." }, { status: 500 });
   }
 
@@ -88,6 +95,20 @@ export async function GET(_request: Request, context: { params: Promise<{ matchI
     counterpartPhotoUrl = `data:${mime};base64,${photoRes.data.image_base64}`;
   }
 
+  const currentCompatibility = currentProfileRes.data
+    ? toCompatibilityProfileFromRow(user.id, currentProfileRes.data as Record<string, unknown>)
+    : null;
+  const counterpartCompatibility = profileRes.data
+    ? toCompatibilityProfileFromRow(counterpartId, {
+        user_id: counterpartId,
+        compatibility_profile: (profileRes.data as Record<string, unknown>).compatibility_profile
+      })
+    : null;
+  const compatibility =
+    currentCompatibility && counterpartCompatibility
+      ? computeCompatibility(currentCompatibility, counterpartCompatibility)
+      : null;
+
   return NextResponse.json(
     {
       match: {
@@ -103,7 +124,17 @@ export async function GET(_request: Request, context: { params: Promise<{ matchI
         senderId: String(row.sender_id),
         body: String(row.body),
         createdAt: String(row.created_at)
-      }))
+      })),
+      uiSummary: {
+        profileHighlights: compatibility?.notes?.slice(0, 3) ?? [],
+        compatibilitySnapshot: compatibility
+          ? {
+              score: compatibility.score,
+              tier: compatibility.tier,
+              warnings: compatibility.warnings
+            }
+          : null
+      }
     },
     { status: 200 }
   );

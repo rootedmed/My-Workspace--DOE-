@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { trackUxEvent } from "@/lib/observability/uxClient";
 
 type MatchItem = {
   id: string;
@@ -76,10 +77,14 @@ export function MatchesList() {
               className="prompt-card match-card"
               role="button"
               tabIndex={0}
-              onClick={() => router.push(`/matches/${match.id}`)}
+              onClick={() => {
+                trackUxEvent("matches_card_opened");
+                router.push(`/matches/${match.id}`);
+              }}
               onKeyDown={(event) => {
                 if (event.key === "Enter" || event.key === " ") {
                   event.preventDefault();
+                  trackUxEvent("matches_card_opened");
                   router.push(`/matches/${match.id}`);
                 }
               }}
@@ -98,11 +103,8 @@ export function MatchesList() {
                       {[match.counterpartAgeRange?.replace("_", "-"), match.counterpartLocationPreference?.replace("_", " ")].filter(Boolean).join(" · ")}
                     </p>
                   ) : null}
-                  <p className="muted tiny">Matched on {new Date(match.createdAt).toLocaleDateString()}</p>
+                  <p className="muted tiny">Matched {new Date(match.createdAt).toLocaleDateString()}</p>
                 </div>
-              </div>
-              <div className="actions">
-                <button type="button" onClick={() => router.push(`/matches/${match.id}`)}>Open chat</button>
               </div>
             </article>
           ))}

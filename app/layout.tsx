@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Commitment Match MVP",
-  description: "Commitment-oriented dating MVP with a 14-day decision track."
+  title: "Commitment Match",
+  description: "A relationship-first dating experience built for real connection."
 };
 
 type RootLayoutProps = Readonly<{
