@@ -27,19 +27,31 @@ vi.mock("@/lib/security/rateLimit", () => ({
 
 vi.mock("@/lib/supabase/server", () => ({
   createServerSupabaseClient: vi.fn(async () => ({
-    from: (table: string) => ({
-      upsert: () => ({
-        select: () => ({
-          single: async () =>
-            table === "onboarding_profiles"
-              ? { data: { user_id: "user-1" }, error: null }
-              : {
-                  data: { current_step: 8, completed: true, total_steps: 8, mode: "deep" },
-                  error: null
-                }
+    from: (table: string) => {
+      if (table === "user_profiles") {
+        return {
+          select: () => ({
+            eq: () => ({
+              maybeSingle: async () => ({ data: null, error: null })
+            })
+          })
+        };
+      }
+
+      return {
+        upsert: () => ({
+          select: () => ({
+            single: async () =>
+              table === "onboarding_profiles"
+                ? { data: { user_id: "user-1" }, error: null }
+                : {
+                    data: { current_step: 8, completed: true, total_steps: 8, mode: "deep" },
+                    error: null
+                  }
+          })
         })
-      })
-    })
+      };
+    }
   }))
 }));
 

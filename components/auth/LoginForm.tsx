@@ -46,9 +46,9 @@ export function LoginForm() {
     <section className="auth-layout">
       <article className="auth-hero panel">
         <p className="eyebrow">Welcome back</p>
-        <h1>Find your person with more clarity and less noise.</h1>
+        <h1>Welcome back. Let&apos;s pick up where you left off.</h1>
         <p className="muted">
-          Thoughtful matching for people done with shallow swipes and mixed signals.
+          Thoughtful matching for people who want less guesswork and more real connection.
         </p>
       </article>
 

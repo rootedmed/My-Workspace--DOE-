@@ -99,6 +99,7 @@ export type UserCalibration = {
 export type UserPhoto = {
   id: string;
   slot: number;
+  displayOrder: number;
   mimeType: string;
   storagePath: string;
   url: string;

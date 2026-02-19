@@ -232,6 +232,16 @@ export function MatchChat({
   return (
     <div className="stack">
       <section className="panel stack">
+        <div className="match-detail-header">
+          <Link href="/matches" className="match-back-link">
+            <span aria-hidden="true">‹</span> Matches
+          </Link>
+          <h1>{match?.counterpartFirstName ?? "Match"}</h1>
+          <button type="button" className="ghost match-overflow-button" aria-label="More actions">
+            •••
+          </button>
+        </div>
+
         <div className="match-row">
           {match?.counterpartPhotoUrl ? (
             // eslint-disable-next-line @next/next/no-img-element
@@ -239,13 +249,10 @@ export function MatchChat({
           ) : (
             <div className="match-avatar match-avatar-fallback">{match?.counterpartFirstName?.[0] ?? "M"}</div>
           )}
-          <div className="stack">
-            <p className="eyebrow">Match Detail</p>
-            <h1>{match?.counterpartFirstName ?? "Match"}</h1>
-          </div>
+          <p className="muted tiny">Matched {new Date(match?.createdAt ?? Date.now()).toLocaleDateString()}</p>
         </div>
 
-        <div className="actions" role="tablist" aria-label="Match details tabs">
+        <div className="actions match-tabs" role="tablist" aria-label="Match details tabs">
           <button
             type="button"
             role="tab"
@@ -268,7 +275,6 @@ export function MatchChat({
           >
             Chat
           </button>
-          <Link href="/matches" className="button-link ghost">Back to Matches</Link>
         </div>
       </section>
 

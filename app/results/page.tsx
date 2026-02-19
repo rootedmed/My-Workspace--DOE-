@@ -114,7 +114,7 @@ export default async function ResultsPage() {
           <div className="stack">
             <section className="results-dna">
               <p className="eyebrow results-eyebrow">Your Relationship DNA</p>
-              <h1 className="results-title">Built from your onboarding answers</h1>
+              <h1 className="results-title">Your relationship DNA</h1>
 
               <div className="results-dna-grid" aria-label="Relationship DNA traits">
                 <article className="results-dna-row">

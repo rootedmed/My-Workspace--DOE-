@@ -52,8 +52,9 @@ export async function GET(request: Request) {
   const supabase = await createServerSupabaseClient();
   const { data, error } = await supabase
     .from("user_photos")
-    .select("id, slot, mime_type, storage_path, created_at, updated_at")
+    .select("id, slot, display_order, mime_type, storage_path, created_at, updated_at")
     .eq("user_id", user.id)
+    .order("display_order", { ascending: true })
     .order("slot", { ascending: true });
 
   if (error) {
@@ -106,6 +107,7 @@ export async function GET(request: Request) {
       return {
         id: String(row.id),
         slot: Number(row.slot),
+        displayOrder: Number(row.display_order ?? row.slot),
         mimeType: String(row.mime_type),
         storagePath: path,
         url: signedResult.data.signedUrl,
@@ -247,13 +249,14 @@ export async function POST(request: Request) {
       {
         user_id: user.id,
         slot,
+        display_order: slot,
         mime_type: file.type,
         storage_path: storagePath,
         updated_at: new Date().toISOString()
       },
       { onConflict: "user_id,slot" }
     )
-    .select("id, slot, mime_type, storage_path, created_at, updated_at")
+    .select("id, slot, display_order, mime_type, storage_path, created_at, updated_at")
     .single();
 
   if (upsertResult.error || !upsertResult.data) {
@@ -333,6 +336,7 @@ export async function POST(request: Request) {
       photo: {
         id: String(upsertResult.data.id),
         slot: Number(upsertResult.data.slot),
+        displayOrder: Number(upsertResult.data.display_order ?? upsertResult.data.slot),
         mimeType: String(upsertResult.data.mime_type),
         storagePath: String(upsertResult.data.storage_path),
         url: signedResult.data.signedUrl,
@@ -342,4 +346,62 @@ export async function POST(request: Request) {
     },
     { status: 200 }
   );
+}
+
+export async function DELETE(request: Request) {
+  try {
+    assertWriteAllowed();
+  } catch {
+    return NextResponse.json({ error: "Preview is read-only." }, { status: 503 });
+  }
+
+  if (!isValidCsrf(request)) {
+    return NextResponse.json({ error: "CSRF token missing or invalid" }, { status: 403 });
+  }
+
+  const user = await getCurrentUser();
+  if (!user?.id) {
+    return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const url = new URL(request.url);
+  const photoId = url.searchParams.get("id")?.trim() ?? "";
+
+  if (!photoId) {
+    return NextResponse.json({ error: "Photo id is required." }, { status: 400 });
+  }
+
+  const supabase = await createServerSupabaseClient();
+  const existing = await supabase
+    .from("user_photos")
+    .select("id, storage_path")
+    .eq("user_id", user.id)
+    .eq("id", photoId)
+    .maybeSingle();
+
+  if (existing.error || !existing.data) {
+    return NextResponse.json({ error: "Photo not found." }, { status: 404 });
+  }
+
+  const deleteRes = await supabase
+    .from("user_photos")
+    .delete()
+    .eq("user_id", user.id)
+    .eq("id", photoId)
+    .select("id")
+    .single();
+
+  if (deleteRes.error) {
+    return NextResponse.json({ error: "Could not delete photo." }, { status: 500 });
+  }
+
+  const storagePath =
+    typeof existing.data.storage_path === "string" && existing.data.storage_path.length > 0
+      ? existing.data.storage_path
+      : null;
+  if (storagePath) {
+    await supabase.storage.from(PHOTO_BUCKET).remove([storagePath]).catch(() => undefined);
+  }
+
+  return NextResponse.json({ deleted: true, id: photoId }, { status: 200 });
 }

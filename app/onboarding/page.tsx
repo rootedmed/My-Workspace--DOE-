@@ -4,6 +4,7 @@ import { OnboardingFlow } from "./OnboardingFlow";
 import { getOnboardingV2State } from "@/lib/onboarding/v2";
 import { isUiRouteEnabled } from "@/lib/config/uiFlags";
 import { UiFallbackNotice } from "@/components/ui/UiFallbackNotice";
+import { getUserProfileSetupState } from "@/lib/profile/setup";
 
 export default async function OnboardingPage({
   searchParams
@@ -19,7 +20,8 @@ export default async function OnboardingPage({
 
   const onboarding = await getOnboardingV2State(user.id);
   if (onboarding.hasProfile && !force) {
-    redirect("/discover");
+    const setup = await getUserProfileSetupState(user.id);
+    redirect(setup.isComplete ? "/discover" : "/profile/setup");
   }
 
   if (!isUiRouteEnabled("onboarding_results")) {

@@ -68,7 +68,7 @@ describe("ResultsPage", () => {
 
     render(await ResultsPage());
 
-    expect(screen.getByRole("heading", { name: "Built from your onboarding answers" })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: "Your relationship DNA" })).toBeInTheDocument();
     expect(screen.getByText("Attachment Style")).toBeInTheDocument();
     expect(screen.getByText("Conflict Style")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "See compatible matches" })).toHaveAttribute("href", "/discover");

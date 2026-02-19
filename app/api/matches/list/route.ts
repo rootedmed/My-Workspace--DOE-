@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { getCurrentUser } from "@/lib/auth/session";
 import { createServerSupabaseClient } from "@/lib/supabase/server";
+import { getUserProfileSetupState } from "@/lib/profile/setup";
 
 const PHOTO_BUCKET = "profile-photos";
 
@@ -8,6 +9,18 @@ export async function GET() {
   const user = await getCurrentUser();
   if (!user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const setupState = await getUserProfileSetupState(user.id);
+  if (!setupState.isComplete) {
+    return NextResponse.json(
+      {
+        matches: [],
+        profileIncomplete: true,
+        missingFields: setupState.missingRequired
+      },
+      { status: 200 }
+    );
   }
 
   const supabase = await createServerSupabaseClient();
@@ -37,9 +50,8 @@ export async function GET() {
       .in("user_id", counterpartIds),
     supabase
       .from("user_photos")
-      .select("user_id, storage_path, mime_type, image_base64")
+      .select("user_id, display_order, storage_path, mime_type, image_base64")
       .in("user_id", counterpartIds)
-      .eq("slot", 1)
   ]);
 
   if (profilesRes.error || photosRes.error) {
@@ -56,25 +68,32 @@ export async function GET() {
       }
     ])
   );
-  const photoPathById = new Map<string, string>();
-  const photoInlineById = new Map<string, string>();
+  const photoPathById = new Map<string, { order: number; path: string }>();
+  const photoInlineById = new Map<string, { order: number; url: string }>();
   for (const row of photosRes.data ?? []) {
     const userId = String(row.user_id);
+    const order = typeof row.display_order === "number" ? row.display_order : 99;
     const path = typeof row.storage_path === "string" ? row.storage_path : "";
     const mimeType = typeof row.mime_type === "string" ? row.mime_type : "image/jpeg";
     const imageBase64 = typeof row.image_base64 === "string" ? row.image_base64 : "";
     if (path) {
-      photoPathById.set(userId, path);
+      const existingPath = photoPathById.get(userId);
+      if (!existingPath || order < existingPath.order) {
+        photoPathById.set(userId, { order, path });
+      }
     }
     if (imageBase64) {
-      photoInlineById.set(userId, `data:${mimeType};base64,${imageBase64}`);
+      const existingInline = photoInlineById.get(userId);
+      if (!existingInline || order < existingInline.order) {
+        photoInlineById.set(userId, { order, url: `data:${mimeType};base64,${imageBase64}` });
+      }
     }
   }
   const photoUrlById = new Map<string, string>();
 
   await Promise.all(
     counterpartIds.map(async (id) => {
-      const path = photoPathById.get(id);
+      const path = photoPathById.get(id)?.path;
       if (!path) return;
       const signed = await supabase.storage.from(PHOTO_BUCKET).createSignedUrl(path, 60 * 60);
       if (!signed.error && signed.data?.signedUrl) {
@@ -92,7 +111,7 @@ export async function GET() {
       counterpartFirstName: profile?.firstName ?? "Match",
       counterpartAgeRange: profile?.ageRange ?? null,
       counterpartLocationPreference: profile?.locationPreference ?? null,
-      photoUrl: photoUrlById.get(counterpartId) ?? photoInlineById.get(counterpartId) ?? null,
+      photoUrl: photoUrlById.get(counterpartId) ?? photoInlineById.get(counterpartId)?.url ?? null,
       createdAt: String(row.created_at)
     };
   });

@@ -1,7 +1,8 @@
 "use client";
 
-import { useCallback, useEffect, useMemo, useState } from "react";
-import { motion } from "framer-motion";
+import { useCallback, useEffect, useState } from "react";
+import { animate, motion, useMotionValue, useReducedMotion, useTransform } from "framer-motion";
+import Link from "next/link";
 import { withCsrfHeaders } from "@/components/auth/csrf";
 import { trackUxEvent } from "@/lib/observability/uxClient";
 
@@ -35,6 +36,12 @@ type DiscoverResponse = {
   candidates: Candidate[];
   incomingLikes: Candidate[];
   emptyReason?: string | null;
+  profileIncomplete?: boolean;
+  missingFields?: string[];
+  photoQualityFlags?: {
+    hasPrimaryPhoto: boolean;
+    photoCount: number;
+  };
   filters?: {
     lookingFor?: string;
     locationPreference?: string;
@@ -102,6 +109,91 @@ async function postSwipe(candidateId: string, action: "like" | "pass") {
   return (await response.json()) as { matched?: boolean; candidateFirstName?: string };
 }
 
+function SwipeCardContent({ candidate }: { candidate: Candidate }) {
+  return (
+    <>
+      <div className="swipe-photo-wrap">
+        {candidate.photoUrl ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img src={candidate.photoUrl} alt={`${candidate.firstName} profile`} className="swipe-photo" />
+        ) : (
+          <div className="swipe-photo-fallback">No photo yet</div>
+        )}
+        {candidate.likedYou ? <span className="trust-chip swipe-badge">Liked you</span> : null}
+      </div>
+
+      <div className="stack">
+        <h3>{candidate.displayMeta.primaryLabel}</h3>
+        <p className="muted tiny">{candidate.displayMeta.secondaryLabel}</p>
+        <p className="small">{candidate.displayMeta.tagline}</p>
+        <p className="small"><strong>Highlight:</strong> {candidate.compatibilityHighlight}</p>
+        <p className="small"><strong>Watch for:</strong> {candidate.watchForInsight}</p>
+      </div>
+    </>
+  );
+}
+
+function SwipeTopCard({
+  candidate,
+  onSwipe
+}: {
+  candidate: Candidate;
+  onSwipe: (action: "like" | "pass", source: "drag") => void;
+}) {
+  const x = useMotionValue(0);
+  const rotate = useTransform(x, [-240, 240], [-12, 12]);
+  const likeOpacity = useTransform(x, [24, 96], [0, 0.24]);
+  const passOpacity = useTransform(x, [-96, -24], [0.24, 0]);
+  const reducedMotion = useReducedMotion();
+
+  return (
+    <motion.article
+      className="swipe-card"
+      drag="x"
+      dragConstraints={{ left: 0, right: 0 }}
+      dragElastic={0.12}
+      style={{ x, rotate: reducedMotion ? 0 : rotate }}
+      transition={
+        reducedMotion
+          ? { duration: 0.16 }
+          : {
+              type: "spring",
+              stiffness: 280,
+              damping: 26,
+              mass: 0.8
+            }
+      }
+      onDragEnd={(_, info) => {
+        const shouldLike = info.offset.x >= 96 || info.velocity.x >= 650;
+        const shouldPass = info.offset.x <= -96 || info.velocity.x <= -650;
+
+        if (shouldLike) {
+          onSwipe("like", "drag");
+          return;
+        }
+        if (shouldPass) {
+          onSwipe("pass", "drag");
+          return;
+        }
+        animate(x, 0, {
+          type: "spring",
+          stiffness: 280,
+          damping: 26,
+          mass: 0.8
+        });
+      }}
+    >
+      <motion.div className="swipe-overlay swipe-overlay-like" style={{ opacity: likeOpacity }}>
+        <span>♥ Liked</span>
+      </motion.div>
+      <motion.div className="swipe-overlay swipe-overlay-pass" style={{ opacity: passOpacity }}>
+        <span>✕ Passed</span>
+      </motion.div>
+      <SwipeCardContent candidate={candidate} />
+    </motion.article>
+  );
+}
+
 export function DiscoverFeed() {
   const [candidates, setCandidates] = useState<Candidate[]>([]);
   const [incomingLikes, setIncomingLikes] = useState<Candidate[]>([]);
@@ -113,6 +205,8 @@ export function DiscoverFeed() {
   const [pendingSwipe, setPendingSwipe] = useState<PendingSwipe | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const [swipeAck, setSwipeAck] = useState<"like" | "pass" | null>(null);
+  const [profileIncomplete, setProfileIncomplete] = useState(false);
+  const [missingFields, setMissingFields] = useState<string[]>([]);
 
   const [vision, setVision] = useState("");
   const [energy, setEnergy] = useState("");
@@ -121,6 +215,7 @@ export function DiscoverFeed() {
   const [locationPreference, setLocationPreference] = useState("");
 
   const topCard = candidates[0] ?? null;
+  const previewCard = candidates[1] ?? null;
 
   useEffect(() => {
     trackUxEvent("discover_viewed");
@@ -147,9 +242,12 @@ export function DiscoverFeed() {
       setCandidates(payload.candidates ?? []);
       setIncomingLikes(payload.incomingLikes ?? []);
       setEmptyReason(payload.emptyReason ?? null);
+      setProfileIncomplete(Boolean(payload.profileIncomplete));
+      setMissingFields(payload.missingFields ?? []);
       trackUxEvent("discover_feed_loaded", {
         candidates: payload.candidates?.length ?? 0,
-        incoming_likes: payload.incomingLikes?.length ?? 0
+        incoming_likes: payload.incomingLikes?.length ?? 0,
+        profile_incomplete: Boolean(payload.profileIncomplete)
       });
     } finally {
       setLoading(false);
@@ -196,6 +294,9 @@ export function DiscoverFeed() {
           action,
           liked_you_first: candidate.likedYou
         });
+        if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+          navigator.vibrate(22);
+        }
       }
     } catch (cause) {
       setCandidates((prev) => [candidate, ...prev]);
@@ -227,6 +328,11 @@ export function DiscoverFeed() {
       source,
       liked_you_first: candidate.likedYou
     });
+
+    if (typeof navigator !== "undefined" && "vibrate" in navigator) {
+      navigator.vibrate(10);
+    }
+
     window.setTimeout(() => {
       setSwipeAck((prev) => (prev === action ? null : prev));
     }, 1200);
@@ -254,8 +360,6 @@ export function DiscoverFeed() {
     trackUxEvent("discover_swipe_undo", { action: pendingSwipe.action });
   }
 
-  const stacked = useMemo(() => candidates.slice(0, 2), [candidates]);
-
   function clearFilters() {
     setVision("");
     setEnergy("");
@@ -269,10 +373,8 @@ export function DiscoverFeed() {
     <>
       <section className="panel stack">
         <p className="eyebrow">Discover</p>
-        <h1>A calmer way to choose who you give energy to.</h1>
-        <p className="muted">
-          Swipe with clarity. Every card is structured around fit, friction, and relationship rhythm.
-        </p>
+        <h1>Discover people who fit your rhythm.</h1>
+        <p className="muted">Swipe with clarity. Every card highlights fit and friction in plain language.</p>
 
         <div className="stack">
           <div>
@@ -399,6 +501,18 @@ export function DiscoverFeed() {
         </>
       ) : null}
 
+      {profileIncomplete ? (
+        <section className="panel stack">
+          <h2>Finish your profile to unlock Discover</h2>
+          <p className="muted">
+            Complete your setup first: {missingFields.join(", ").replaceAll("_", " ")}.
+          </p>
+          <div className="actions">
+            <Link href="/profile/setup" className="button-link">Open profile setup</Link>
+          </div>
+        </section>
+      ) : null}
+
       {matchBanner ? (
         <section className="panel panel-tight">
           <p className="inline-ok">{matchBanner}</p>
@@ -431,56 +545,37 @@ export function DiscoverFeed() {
       <section className="panel stack">
         <h2>Swipe stack</h2>
         {swipeAck ? <p className="tiny inline-ok">{swipeAck === "like" ? "Liked" : "Passed"}</p> : null}
-        {loading ? <p className="muted">Loading profiles...</p> : null}
-        {!loading && !topCard ? <p className="muted">{emptyReason ?? "No profiles in this filter set yet."}</p> : null}
+
+        {loading ? (
+          <div className="swipe-stack" aria-label="Discover cards loading">
+            <article className="swipe-card swipe-card-skeleton">
+              <div className="swipe-photo-wrap swipe-photo-skeleton" />
+              <div className="stack">
+                <div className="skeleton-line skeleton-line-lg" />
+                <div className="skeleton-line" />
+                <div className="skeleton-line" />
+                <div className="skeleton-line" />
+              </div>
+            </article>
+          </div>
+        ) : null}
+
+        {!loading && !topCard ? <p className="muted">{emptyReason ?? "No new profiles in this filter set. Try widening one filter."}</p> : null}
 
         {topCard ? (
           <div className="swipe-stack" aria-label="Discover cards">
-            {stacked
-              .slice()
-              .reverse()
-              .map((candidate, index) => {
-                const isTop = candidate.id === topCard.id;
-                return (
-                  <motion.article
-                    key={candidate.id}
-                    className="swipe-card"
-                    style={{
-                      zIndex: 2 - index,
-                      transform: `translateY(${index * 10}px) scale(${1 - index * 0.02})`
-                    }}
-                    drag={isTop ? "x" : false}
-                    dragConstraints={{ left: 0, right: 0 }}
-                    dragElastic={0.12}
-                    onDragEnd={(_, info) => {
-                      if (!isTop) return;
-                      if (info.offset.x > 88) {
-                        queueSwipe("like", candidate, "drag");
-                      } else if (info.offset.x < -88) {
-                        queueSwipe("pass", candidate, "drag");
-                      }
-                    }}
-                  >
-                    <div className="swipe-photo-wrap">
-                      {candidate.photoUrl ? (
-                        // eslint-disable-next-line @next/next/no-img-element
-                        <img src={candidate.photoUrl} alt={`${candidate.firstName} profile`} className="swipe-photo" />
-                      ) : (
-                        <div className="swipe-photo-fallback">No photo yet</div>
-                      )}
-                      {candidate.likedYou ? <span className="trust-chip swipe-badge">Liked you</span> : null}
-                    </div>
+            {previewCard ? (
+              <article className="swipe-card swipe-card-preview" aria-hidden="true">
+                <SwipeCardContent candidate={previewCard} />
+              </article>
+            ) : null}
 
-                    <div className="stack">
-                      <h3>{candidate.displayMeta.primaryLabel}</h3>
-                      <p className="muted tiny">{candidate.displayMeta.secondaryLabel}</p>
-                      <p className="small">{candidate.displayMeta.tagline}</p>
-                      <p className="small"><strong>Highlight:</strong> {candidate.compatibilityHighlight}</p>
-                      <p className="small"><strong>Watch for:</strong> {candidate.watchForInsight}</p>
-                    </div>
-                  </motion.article>
-                );
-              })}
+            <SwipeTopCard
+              candidate={topCard}
+              onSwipe={(action, source) => {
+                queueSwipe(action, topCard, source);
+              }}
+            />
           </div>
         ) : null}
 

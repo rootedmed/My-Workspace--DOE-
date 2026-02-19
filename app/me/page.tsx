@@ -1,10 +1,10 @@
-import Link from "next/link";
 import { redirect } from "next/navigation";
 import { getCurrentUser } from "@/lib/auth/session";
 import { BottomTabs } from "@/components/navigation/BottomTabs";
 import { getOnboardingV2State } from "@/lib/onboarding/v2";
 import { isUiRouteEnabled } from "@/lib/config/uiFlags";
 import { UiFallbackNotice } from "@/components/ui/UiFallbackNotice";
+import { ProfileHub } from "@/components/me/ProfileHub";
 
 export default async function MePage() {
   const user = await getCurrentUser();
@@ -13,7 +13,9 @@ export default async function MePage() {
   }
 
   const onboarding = await getOnboardingV2State(user.id);
-  const hasProfile = onboarding.hasProfile;
+  if (!onboarding.hasProfile) {
+    redirect("/onboarding");
+  }
 
   if (!isUiRouteEnabled("home_me")) {
     return (
@@ -25,8 +27,8 @@ export default async function MePage() {
               description="This visual module is currently gated for staged rollout."
               primaryHref="/app"
               primaryLabel="Back to Home"
-              secondaryHref={hasProfile ? "/discover" : "/onboarding"}
-              secondaryLabel={hasProfile ? "Open Discover" : "Start onboarding"}
+              secondaryHref="/discover"
+              secondaryLabel="Open Discover"
             />
           </div>
           <BottomTabs current="me" />
@@ -42,41 +44,10 @@ export default async function MePage() {
           <section className="panel stack profile-hero">
             <p className="eyebrow">Me</p>
             <h1>{user.firstName ?? "You"}</h1>
-            <p className="muted">
-              {hasProfile
-                ? "Your relationship profile is ready and actively guiding your recommendations."
-                : "Complete onboarding to unlock Discover and Matches."}
-            </p>
-            <div className="actions">
-              <Link href={hasProfile ? "/discover" : "/onboarding"} className="button-link">
-                {hasProfile ? "Open Discover" : "Start Onboarding"}
-              </Link>
-              {hasProfile ? (
-                <Link href="/onboarding?force=1" className="button-link ghost">
-                  Redo onboarding
-                </Link>
-              ) : null}
-              {hasProfile ? (
-                <Link href="/guest" className="button-link ghost">
-                  Guest compatibility
-                </Link>
-              ) : null}
-            </div>
+            <p className="muted">Your profile is live. Keep it current to get better matches.</p>
           </section>
 
-          {hasProfile ? (
-            <section className="panel stack">
-              <h2>Profile summary</h2>
-              <div className="prompt-card">
-                <p className="muted small">You’ve completed your relationship profile and your results are live.</p>
-                <p className="muted tiny">Last updated: {onboarding.completedAt ? new Date(onboarding.completedAt).toLocaleDateString() : "Recently"}</p>
-              </div>
-              <div className="actions">
-                <Link href="/results" className="button-link ghost">View Relationship DNA</Link>
-                <Link href="/guest" className="button-link ghost">Guest Compatibility</Link>
-              </div>
-            </section>
-          ) : null}
+          <ProfileHub firstName={user.firstName ?? "You"} />
         </div>
         <BottomTabs current="me" />
       </section>

@@ -8,6 +8,11 @@ import { assertWriteAllowed } from "@/lib/config/env.server";
 import { ensureAppUser } from "@/lib/auth/ensureAppUser";
 import { getRequestId, logStructured } from "@/lib/observability/logger";
 import { deriveAttachmentAxis, deriveReadinessScore } from "@/lib/compatibility";
+import {
+  ageRangeFromDateOfBirth,
+  locationPreferenceFromDistance,
+  lookingForFromProfileValue
+} from "@/lib/profile/setup";
 
 const payloadSchema = z.object({
   past_attribution: z.enum([
@@ -120,16 +125,34 @@ export async function POST(request: Request) {
   };
 
   const supabase = await createServerSupabaseClient();
+  const userProfileRes = await supabase
+    .from("user_profiles")
+    .select("date_of_birth, distance_km, relationship_intention")
+    .eq("user_id", user.id)
+    .maybeSingle();
+  const ageRange =
+    ageRangeFromDateOfBirth(
+      typeof userProfileRes.data?.date_of_birth === "string" ? userProfileRes.data.date_of_birth : null
+    ) ?? "31_37";
+  const locationPreference = locationPreferenceFromDistance(
+    typeof userProfileRes.data?.distance_km === "number" ? userProfileRes.data.distance_km : null
+  );
+  const lookingFor = lookingForFromProfileValue(
+    typeof userProfileRes.data?.relationship_intention === "string"
+      ? userProfileRes.data.relationship_intention
+      : null
+  );
+
   const upsertRes = await supabase
     .from("onboarding_profiles")
     .upsert(
       {
         user_id: user.id,
         first_name: firstName,
-        age_range: "31_37",
-        location_preference: "same_city",
+        age_range: ageRange,
+        location_preference: locationPreference,
         intent: {
-          lookingFor: "serious_relationship",
+          lookingFor,
           timelineMonths,
           readiness,
           weeklyCapacity

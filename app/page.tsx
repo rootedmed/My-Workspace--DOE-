@@ -22,9 +22,9 @@ export default function HomePage() {
     <main className="public-main">
       <section className="landing-hero panel">
         <p className="eyebrow">Commitment Match</p>
-        <h1>Dating that feels like a breath of fresh air.</h1>
+        <h1>Dating with clarity, not chaos.</h1>
         <p className="muted">
-          A calmer, relationship-first experience for people who want connection with clarity, not chaos.
+          A relationship-first experience for people who want depth, intention, and momentum.
         </p>
         <div className="actions">
           <Link className="button-link" href="/register">

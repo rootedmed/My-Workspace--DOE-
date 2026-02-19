@@ -63,9 +63,10 @@ export async function GET(_request: Request, context: { params: Promise<{ matchI
       .maybeSingle(),
     supabase
       .from("user_photos")
-      .select("storage_path, mime_type, image_base64")
+      .select("storage_path, mime_type, image_base64, display_order")
       .eq("user_id", counterpartId)
-      .eq("slot", 1)
+      .order("display_order", { ascending: true })
+      .limit(1)
       .maybeSingle(),
     supabase
       .from("relationship_checkin_opt_ins")

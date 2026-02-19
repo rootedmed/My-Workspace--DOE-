@@ -383,7 +383,7 @@ function SummaryScreen({ onContinue }: { onContinue: () => void }) {
         </article>
       </div>
       <div className="actions">
-        <button type="button" onClick={onContinue}>Find my matches</button>
+        <button type="button" onClick={onContinue}>Continue to profile setup</button>
       </div>
     </section>
   );
@@ -577,7 +577,7 @@ export function OnboardingFlow({
 
       onComplete?.(completedProfile);
       trackUxEvent("onboarding_completed");
-      router.push("/results");
+      router.push("/profile/setup");
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not complete onboarding.");
     } finally {

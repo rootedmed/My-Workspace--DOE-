@@ -5,6 +5,7 @@ import { BottomTabs } from "@/components/navigation/BottomTabs";
 import { getOnboardingV2State } from "@/lib/onboarding/v2";
 import { isUiRouteEnabled } from "@/lib/config/uiFlags";
 import { UiFallbackNotice } from "@/components/ui/UiFallbackNotice";
+import { getUserProfileSetupState } from "@/lib/profile/setup";
 
 export default async function MatchesPage() {
   const user = await getCurrentUser();
@@ -15,6 +16,10 @@ export default async function MatchesPage() {
   const onboarding = await getOnboardingV2State(user.id);
   if (!onboarding.hasProfile) {
     redirect("/onboarding");
+  }
+  const profileSetup = await getUserProfileSetupState(user.id);
+  if (!profileSetup.isComplete) {
+    redirect("/profile/setup");
   }
 
   if (!isUiRouteEnabled("matches")) {

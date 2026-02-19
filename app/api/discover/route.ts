@@ -5,6 +5,7 @@ import type { OnboardingProfile } from "@/lib/domain/types";
 import { scoreCompatibility } from "@/lib/matching/compatibility";
 import { isValidCsrf } from "@/lib/security/csrf";
 import { ensureAppUser } from "@/lib/auth/ensureAppUser";
+import { getUserProfileSetupState } from "@/lib/profile/setup";
 import {
   generateIncompatibilityReport,
   type CompatibilityProfileForReport,
@@ -115,6 +116,24 @@ export async function GET(request: Request) {
   const user = await getCurrentUser();
   if (!user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const setupState = await getUserProfileSetupState(user.id);
+  if (!setupState.isComplete) {
+    return NextResponse.json(
+      {
+        candidates: [],
+        incomingLikes: [],
+        emptyReason: "Complete your profile setup to start discovering matches.",
+        profileIncomplete: true,
+        missingFields: setupState.missingRequired,
+        photoQualityFlags: {
+          hasPrimaryPhoto: setupState.photoCount > 0,
+          photoCount: setupState.photoCount
+        }
+      },
+      { status: 200 }
+    );
   }
 
   const supabase = await createServerSupabaseClient();
@@ -271,34 +290,40 @@ export async function GET(request: Request) {
   const photosRes = allPhotoIds.length
     ? await supabase
         .from("user_photos")
-        .select("user_id, storage_path, mime_type, image_base64")
+        .select("user_id, display_order, storage_path, mime_type, image_base64")
         .in("user_id", allPhotoIds)
-        .eq("slot", 1)
     : { data: [], error: null };
 
   if (photosRes.error) {
     return NextResponse.json({ error: "Could not load candidate photos." }, { status: 500 });
   }
 
-  const photoPathByUser = new Map<string, string>();
-  const photoInlineByUser = new Map<string, string>();
+  const photoPathByUser = new Map<string, { order: number; path: string }>();
+  const photoInlineByUser = new Map<string, { order: number; url: string }>();
   for (const row of photosRes.data ?? []) {
     const userId = String(row.user_id);
+    const order = typeof row.display_order === "number" ? row.display_order : 99;
     const path = typeof row.storage_path === "string" ? row.storage_path : "";
     const mimeType = typeof row.mime_type === "string" ? row.mime_type : "image/jpeg";
     const imageBase64 = typeof row.image_base64 === "string" ? row.image_base64 : "";
     if (path) {
-      photoPathByUser.set(userId, path);
+      const existingPath = photoPathByUser.get(userId);
+      if (!existingPath || order < existingPath.order) {
+        photoPathByUser.set(userId, { order, path });
+      }
     }
     if (imageBase64) {
-      photoInlineByUser.set(userId, `data:${mimeType};base64,${imageBase64}`);
+      const existingInline = photoInlineByUser.get(userId);
+      if (!existingInline || order < existingInline.order) {
+        photoInlineByUser.set(userId, { order, url: `data:${mimeType};base64,${imageBase64}` });
+      }
     }
   }
 
   const signedUrlByUser = new Map<string, string>();
   await Promise.all(
     allPhotoIds.map(async (id) => {
-      const path = photoPathByUser.get(id);
+      const path = photoPathByUser.get(id)?.path;
       if (!path) return;
       const signed = await supabase.storage.from(PHOTO_BUCKET).createSignedUrl(path, 60 * 60);
       if (!signed.error && signed.data?.signedUrl) {
@@ -328,7 +353,7 @@ export async function GET(request: Request) {
       firstName: candidate.firstName,
       ageRange: candidate.ageRange,
       locationPreference: candidate.locationPreference,
-      photoUrl: signedUrlByUser.get(candidate.id) ?? photoInlineByUser.get(candidate.id) ?? null,
+      photoUrl: signedUrlByUser.get(candidate.id) ?? photoInlineByUser.get(candidate.id)?.url ?? null,
       compatibilityHighlight: insight.highlight,
       watchForInsight: insight.watchFor,
       likedYou: incomingLikeIds.has(candidate.id),
@@ -360,6 +385,12 @@ export async function GET(request: Request) {
           vision: visionFilter,
           energy: energyFilter,
           conflict_pace: conflictPaceFilter
+        },
+        profileIncomplete: false,
+        missingFields: [],
+        photoQualityFlags: {
+          hasPrimaryPhoto: setupState.photoCount > 0,
+          photoCount: setupState.photoCount
         }
       },
       { status: 200 }
@@ -376,6 +407,12 @@ export async function GET(request: Request) {
       vision: visionFilter,
       energy: energyFilter,
       conflict_pace: conflictPaceFilter
+    },
+    profileIncomplete: false,
+    missingFields: [],
+    photoQualityFlags: {
+      hasPrimaryPhoto: setupState.photoCount > 0,
+      photoCount: setupState.photoCount
     }
   }, { status: 200 });
 }
@@ -388,6 +425,18 @@ export async function POST(request: Request) {
   const user = await getCurrentUser();
   if (!user?.id) {
     return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+  }
+
+  const setupState = await getUserProfileSetupState(user.id);
+  if (!setupState.isComplete) {
+    return NextResponse.json(
+      {
+        error: "Complete your profile setup before swiping.",
+        profileIncomplete: true,
+        missingFields: setupState.missingRequired
+      },
+      { status: 400 }
+    );
   }
 
   await ensureAppUser({ id: user.id, email: user.email, firstName: user.firstName }).catch(() => undefined);

@@ -47,9 +47,9 @@ export function RegisterForm() {
     <section className="auth-layout">
       <article className="auth-hero panel">
         <p className="eyebrow">Start fresh</p>
-        <h1>Dating that respects your time, energy, and standards.</h1>
+        <h1>Create your account and start with intention.</h1>
         <p className="muted">
-          Build your profile once, get meaningful matches, and move with confidence.
+          Build a profile that feels like you, then meet people who match your direction.
         </p>
       </article>
 

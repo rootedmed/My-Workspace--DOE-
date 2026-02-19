@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
+import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { trackUxEvent } from "@/lib/observability/uxClient";
 
@@ -19,6 +20,8 @@ export function MatchesList() {
   const [matches, setMatches] = useState<MatchItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [profileIncomplete, setProfileIncomplete] = useState(false);
+  const [missingFields, setMissingFields] = useState<string[]>([]);
 
   async function loadMatches(background = false) {
     if (!background) {
@@ -32,8 +35,14 @@ export function MatchesList() {
         setError(payload?.error ?? "Could not load matches.");
         return;
       }
-      const payload = (await response.json()) as { matches: MatchItem[] };
+      const payload = (await response.json()) as {
+        matches: MatchItem[];
+        profileIncomplete?: boolean;
+        missingFields?: string[];
+      };
       setMatches(payload.matches ?? []);
+      setProfileIncomplete(Boolean(payload.profileIncomplete));
+      setMissingFields(payload.missingFields ?? []);
     } finally {
       if (!background) {
         setLoading(false);
@@ -54,11 +63,22 @@ export function MatchesList() {
     <>
       <section className="panel stack">
         <p className="eyebrow">Matches</p>
-        <h1>Your mutual matches</h1>
-        <p className="muted">Mutual likes appear here.</p>
+        <h1>Matches</h1>
+        <p className="muted">Conversations start here.</p>
       </section>
 
       <section className="panel stack">
+        {profileIncomplete ? (
+          <article className="prompt-card">
+            <p className="small">
+              Finish your profile setup to unlock matches: {missingFields.join(", ").replaceAll("_", " ")}.
+            </p>
+            <div className="actions">
+              <Link href="/profile/setup" className="button-link">Open profile setup</Link>
+            </div>
+          </article>
+        ) : null}
+
         <div className="actions">
           <button type="button" className="ghost" onClick={() => void loadMatches()}>Refresh</button>
         </div>
@@ -67,7 +87,7 @@ export function MatchesList() {
         {error ? <p role="alert" className="inline-error">{error}</p> : null}
 
         {!loading && !error && matches.length === 0 ? (
-          <p className="muted">No matches yet. Keep swiping in Discover.</p>
+          <p className="muted">No matches yet. Head to Discover and keep it intentional.</p>
         ) : null}
 
         <div className="stack">
