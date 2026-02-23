@@ -1,7 +1,7 @@
 import JSON5 from "json5";
 import { QUICK_OPTIONS } from "@/lib/onboarding/lucy/config";
 import { detectSafetyType } from "@/lib/onboarding/lucy/detectors";
-import { hasAllRequiredAnswers, parseQuickModeAnswer } from "@/lib/onboarding/lucy/extractors";
+import { extractForStage, hasAllRequiredAnswers, parseQuickModeAnswer } from "@/lib/onboarding/lucy/extractors";
 import { LUCY_FREE_CHAT_SYSTEM_PROMPT, LUCY_FREE_EXTRACTION_SYSTEM_PROMPT } from "@/lib/onboarding/lucy/systemPrompt";
 import type {
   LucyAnswerField,
@@ -101,6 +101,21 @@ type GeneratedLucyReply = {
   geminiErrorCode: string | null;
 };
 
+type FreeCoverageLevel = "low" | "medium" | "high";
+
+type FreeSteeringSnapshot = {
+  confidenceByField: Record<LucyAnswerField, number>;
+  levelByField: Record<LucyAnswerField, FreeCoverageLevel>;
+  lowConfidenceFields: LucyAnswerField[];
+  estimatedCoveredFields: LucyAnswerField[];
+  coverageScore: number;
+  latestSignalFields: LucyAnswerField[];
+  latestHadSignal: boolean;
+  suggestedField: LucyAnswerField | null;
+};
+
+type PromptGuardReason = "vague" | "repeat" | "missing_question" | "none";
+
 const REQUIRED_FIELDS: LucyAnswerField[] = [
   "past_attribution",
   "conflict_speed",
@@ -129,6 +144,63 @@ const RELATIONSHIP_VISION_VALUES = new Set(["independent", "enmeshed", "friendsh
 const GROWTH_INTENTION_VALUES = new Set(["depth", "balance", "chosen", "peace", "alignment"]);
 const LOVE_EXPRESSION_VALUES = new Set(["acts", "time", "words", "physical", "gifts"]);
 const RELATIONAL_STRENGTH_VALUES = new Set(["consistency", "loyalty", "honesty", "joy", "support"]);
+
+const FIELD_TO_STAGE = {
+  past_attribution: "past_attribution",
+  conflict_speed: "conflict_speed",
+  support_need: "support_need",
+  emotional_openness: "emotional_openness",
+  love_expression: "love_expression",
+  relationship_vision: "relationship_vision",
+  relational_strengths: "relational_strengths",
+  growth_intention: "growth_intention"
+} as const;
+
+const TOPIC_TO_FIELDS: Array<{ pattern: RegExp; fields: LucyAnswerField[] }> = [
+  { pattern: /\bex\b|last relationship|past|before|ended|ghosted|breadcrumb|situationship|hook ?ups?/i, fields: ["past_attribution", "conflict_speed", "growth_intention"] },
+  { pattern: /conflict|fight|argument|tense|tension|resolve|repair|silent treatment|shut down/i, fields: ["conflict_speed", "support_need"] },
+  { pattern: /stress|overwhelmed|support|listen|heard|space|help|comfort/i, fields: ["support_need", "emotional_openness"] },
+  { pattern: /vulnerab|open up|trust|guarded|private|depth|share emotions/i, fields: ["emotional_openness", "relationship_vision"] },
+  { pattern: /show love|love language|care|affection|time|words|touch|physical|gesture/i, fields: ["love_expression", "relational_strengths"] },
+  { pattern: /healthy relationship|ideal|future|long.?term|vision|week to week|together/i, fields: ["relationship_vision", "growth_intention"] },
+  { pattern: /proud|strength|bring|loyal|consisten|honest|supportive/i, fields: ["relational_strengths", "growth_intention"] },
+  { pattern: /next relationship|different this time|want to change|this time|moving forward/i, fields: ["growth_intention", "relationship_vision"] }
+];
+
+const BRIDGE_QUESTION_BANK: Record<LucyAnswerField, string[]> = {
+  past_attribution: [
+    "Quick rewind: what felt like the core pattern that ended your last relationship?",
+    "Putting it simply, what was the main thing that kept breaking the relationship?"
+  ],
+  conflict_speed: [
+    "When tension hits, are you more talk-it-through-now or space-first?",
+    "When conflict starts, what do you do first: lean in quickly or step back a bit?"
+  ],
+  support_need: [
+    "When life stress spikes, what helps most from a partner first: listening, practical help, closeness, space, or distraction?",
+    "Under stress, what support makes you feel cared for right away?"
+  ],
+  emotional_openness: [
+    "How easy is vulnerability for you with someone you’re dating?",
+    "Do you open up naturally, or more slowly once trust is built?"
+  ],
+  love_expression: [
+    "How do you naturally show love day to day?",
+    "When you care deeply, what are the top one or two ways that shows up from you?"
+  ],
+  relationship_vision: [
+    "What does a healthy relationship look like in everyday life for you?",
+    "What kind of relationship structure fits you best long-term?"
+  ],
+  relational_strengths: [
+    "What do you think you bring to a relationship that you’re genuinely proud of?",
+    "If someone described your relationship strengths, what would they say?"
+  ],
+  growth_intention: [
+    "What is the one thing you want to be different in your next relationship?",
+    "Looking ahead, what change matters most to you this time?"
+  ]
+};
 
 function nowIso(): string {
   return new Date().toISOString();
@@ -200,6 +272,158 @@ function normalizePhase(value: unknown): LucyFreeExtractionPhase | undefined {
 
 function missingFields(state: LucySessionState): LucyAnswerField[] {
   return REQUIRED_FIELDS.filter((field) => !hasValue(state, field));
+}
+
+function confidenceLevel(confidence: number): FreeCoverageLevel {
+  if (confidence >= 80) return "high";
+  if (confidence >= 60) return "medium";
+  return "low";
+}
+
+function normalizeQuestionForComparison(text: string): string {
+  return text
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function relatedFieldsForMessage(message: string): LucyAnswerField[] {
+  const ranked: LucyAnswerField[] = [];
+  for (const entry of TOPIC_TO_FIELDS) {
+    if (!entry.pattern.test(message)) continue;
+    for (const field of entry.fields) {
+      if (!ranked.includes(field)) ranked.push(field);
+    }
+  }
+  return ranked;
+}
+
+function estimateLatestSignalFields(message: string): LucyAnswerField[] {
+  const hits: LucyAnswerField[] = [];
+  for (const field of REQUIRED_FIELDS) {
+    const stage = FIELD_TO_STAGE[field];
+    const extracted = extractForStage(stage, message);
+    const adjusted = extracted.confidence - (extracted.ambiguous ? 12 : 0);
+    if (extracted.matched && adjusted >= 68) {
+      hits.push(field);
+    }
+  }
+  return hits;
+}
+
+function estimateSteeringSnapshot(state: LucySessionState, latestUserMessage: string): FreeSteeringSnapshot {
+  const confidenceByField = REQUIRED_FIELDS.reduce(
+    (acc, field) => {
+      acc[field] = 0;
+      return acc;
+    },
+    {} as Record<LucyAnswerField, number>
+  );
+
+  for (const field of REQUIRED_FIELDS) {
+    const envelopeConfidence = state.extraction_envelopes[field]?.confidence ?? 0;
+    if (envelopeConfidence > confidenceByField[field]) {
+      confidenceByField[field] = Math.max(0, Math.min(100, Math.round(envelopeConfidence)));
+    } else if (hasValue(state, field)) {
+      confidenceByField[field] = Math.max(confidenceByField[field], 84);
+    }
+  }
+
+  for (const entry of state.messages) {
+    if (entry.role !== "user") continue;
+    for (const field of REQUIRED_FIELDS) {
+      const stage = FIELD_TO_STAGE[field];
+      const extracted = extractForStage(stage, entry.content);
+      if (!extracted.matched) continue;
+      const adjusted = Math.max(0, Math.min(95, Math.round(extracted.confidence - (extracted.ambiguous ? 12 : 0))));
+      if (adjusted > confidenceByField[field]) {
+        confidenceByField[field] = adjusted;
+      }
+    }
+  }
+
+  const levelByField = REQUIRED_FIELDS.reduce(
+    (acc, field) => {
+      acc[field] = confidenceLevel(confidenceByField[field]);
+      return acc;
+    },
+    {} as Record<LucyAnswerField, FreeCoverageLevel>
+  );
+
+  const estimatedCoveredFields = REQUIRED_FIELDS.filter((field) => confidenceByField[field] >= 70);
+  const lowConfidenceFields = [...REQUIRED_FIELDS]
+    .filter((field) => confidenceByField[field] < 70)
+    .sort((left, right) => confidenceByField[left] - confidenceByField[right]);
+  const latestSignalFields = estimateLatestSignalFields(latestUserMessage);
+  const latestHadSignal = latestSignalFields.length > 0;
+  const related = relatedFieldsForMessage(latestUserMessage);
+  const suggestedField =
+    related.find((field) => lowConfidenceFields.includes(field)) ??
+    lowConfidenceFields[0] ??
+    null;
+  const scoreTotal = REQUIRED_FIELDS.reduce((sum, field) => sum + confidenceByField[field], 0);
+  const coverageScore = Math.max(0, Math.min(100, Math.round(scoreTotal / REQUIRED_FIELDS.length)));
+
+  return {
+    confidenceByField,
+    levelByField,
+    lowConfidenceFields,
+    estimatedCoveredFields,
+    coverageScore,
+    latestSignalFields,
+    latestHadSignal,
+    suggestedField
+  };
+}
+
+function pickBridgeQuestion(field: LucyAnswerField, seed: number): string {
+  const questions = BRIDGE_QUESTION_BANK[field] ?? BRIDGE_QUESTION_BANK.past_attribution;
+  if (questions.length === 0) return "What feels most true for you there?";
+  return questions[Math.abs(seed) % questions.length] ?? questions[0]!;
+}
+
+function applyPromptGuard(
+  state: LucySessionState,
+  content: string,
+  latestUserMessage: string,
+  steering: FreeSteeringSnapshot
+): { content: string; reason: PromptGuardReason } {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (!normalized) {
+    const fallbackField = steering.suggestedField ?? "past_attribution";
+    const question = pickBridgeQuestion(fallbackField, countUserTurns(state.messages));
+    return { content: `That makes sense. ${question}`, reason: "missing_question" };
+  }
+
+  const suggestedField = steering.suggestedField;
+  if (!suggestedField) return { content: normalized, reason: "none" };
+
+  const existingQuestions = splitQuestionLikeSegments(normalized);
+  const hasQuestion = existingQuestions.length > 0;
+  const repeatPool = recentAssistantQuestions(state.messages, 2).map((entry) => normalizeQuestionForComparison(entry));
+  const firstQuestionNormalized = hasQuestion ? normalizeQuestionForComparison(existingQuestions[0]!) : "";
+  const repeatedQuestion = firstQuestionNormalized.length > 0 && repeatPool.includes(firstQuestionNormalized);
+  const vagueQuestion = /tell me more|say more|how did that make you feel|anything else\?|go deeper/i.test(normalized);
+
+  if (!hasQuestion || repeatedQuestion || (vagueQuestion && steering.latestHadSignal)) {
+    const lead = normalized
+      .split(/(?<=[.!?])\s+/)
+      .find((segment) => !segment.includes("?")) ?? "That makes sense.";
+    const bridge = pickBridgeQuestion(suggestedField, countUserTurns(state.messages) + latestUserMessage.length);
+    const rebuilt = `${lead.trim()} ${bridge}`.replace(/\s+/g, " ").trim();
+    if (!hasQuestion) return { content: rebuilt, reason: "missing_question" };
+    if (repeatedQuestion) return { content: rebuilt, reason: "repeat" };
+    return { content: rebuilt, reason: "vague" };
+  }
+
+  return { content: normalized, reason: "none" };
+}
+
+function shouldShowWrapNudge(state: LucySessionState, steering: FreeSteeringSnapshot): boolean {
+  if (state.control_flags.free_wrap_nudge_shown) return false;
+  const userTurns = countUserTurns(state.messages);
+  return userTurns >= 10 && steering.coverageScore >= 78 && steering.lowConfidenceFields.length <= 2;
 }
 
 function safeQuote(value: unknown): string | undefined {
@@ -820,9 +1044,16 @@ function mergeContinuationReply(firstText: string, continuationText: string): st
   return merged.length > 0 ? merged : null;
 }
 
-function buildFreeChatPrompt(state: LucySessionState, latestUserMessage: string): string {
+function buildFreeChatPrompt(
+  state: LucySessionState,
+  latestUserMessage: string,
+  steering: FreeSteeringSnapshot
+): string {
   const userTurnCount = countUserTurns(state.messages);
   const recentQuestions = recentAssistantQuestions(state.messages, 2);
+  const renderedCoverage = REQUIRED_FIELDS
+    .map((field) => `${field}:${steering.levelByField[field]}(${steering.confidenceByField[field]})`)
+    .join(" | ");
 
   return [
     "Conversation history (most recent last):",
@@ -833,8 +1064,17 @@ function buildFreeChatPrompt(state: LucySessionState, latestUserMessage: string)
     "Runtime steering context:",
     `- user_turn_count: ${userTurnCount}`,
     `- last_assistant_questions: ${recentQuestions.join(" | ") || "none"}`,
+    `- latest_turn_signal_hit: ${steering.latestHadSignal ? "yes" : "no"}`,
+    `- latest_turn_signal_fields: ${steering.latestSignalFields.join(", ") || "none"}`,
+    `- estimated_coverage_score: ${steering.coverageScore}`,
+    `- estimated_covered_fields: ${steering.estimatedCoveredFields.join(", ") || "none"}`,
+    `- low_confidence_fields: ${steering.lowConfidenceFields.join(", ") || "none"}`,
+    `- preferred_next_dimension: ${steering.suggestedField ?? "none"}`,
+    `- confidence_by_dimension: ${renderedCoverage}`,
     "",
     "Steering goals (internal): past attribution; conflict+support; openness; vision+growth; love expression+strengths.",
+    "If latest_turn_signal_hit=no, ask one clarifier only, then pivot to preferred_next_dimension.",
+    "If latest_turn_signal_hit=yes, validate briefly, extract, and bridge to preferred_next_dimension.",
     "Reply as Lucy now. Follow system rules exactly."
   ].join("\n");
 }
@@ -902,8 +1142,12 @@ function fallbackNoticeForFailure(status: GeminiCallStatus, result: GeminiCallRe
   return CHAT_RETRY_NOTICE;
 }
 
-async function generateLucyReply(state: LucySessionState, latestUserMessage: string): Promise<GeneratedLucyReply> {
-  const prompt = buildFreeChatPrompt(state, latestUserMessage);
+async function generateLucyReply(
+  state: LucySessionState,
+  latestUserMessage: string,
+  steering: FreeSteeringSnapshot
+): Promise<GeneratedLucyReply> {
+  const prompt = buildFreeChatPrompt(state, latestUserMessage, steering);
   const first = await callGemini(LUCY_FREE_CHAT_SYSTEM_PROMPT, prompt, {
     json: false,
     maxTokens: 640,
@@ -1127,6 +1371,30 @@ function ensureFreeFlagDefaults(state: LucySessionState): LucySessionState {
       REQUIRED_FIELDS.includes(state.control_flags.free_manual_gap_field)
         ? state.control_flags.free_manual_gap_field
         : undefined,
+    free_low_signal_streak:
+      typeof state.control_flags.free_low_signal_streak === "number" &&
+      Number.isFinite(state.control_flags.free_low_signal_streak)
+        ? Math.max(0, Math.round(state.control_flags.free_low_signal_streak))
+        : 0,
+    free_wrap_nudge_shown: Boolean(state.control_flags.free_wrap_nudge_shown),
+    free_coverage_score:
+      typeof state.control_flags.free_coverage_score === "number" &&
+      Number.isFinite(state.control_flags.free_coverage_score)
+        ? Math.max(0, Math.min(100, Math.round(state.control_flags.free_coverage_score)))
+        : 0,
+    free_coverage_fields_estimated: normalizeFieldList(state.control_flags.free_coverage_fields_estimated),
+    free_prompt_guard_hits:
+      typeof state.control_flags.free_prompt_guard_hits === "number" &&
+      Number.isFinite(state.control_flags.free_prompt_guard_hits)
+        ? Math.max(0, Math.round(state.control_flags.free_prompt_guard_hits))
+        : 0,
+    free_prompt_guard_reason:
+      state.control_flags.free_prompt_guard_reason === "vague" ||
+      state.control_flags.free_prompt_guard_reason === "repeat" ||
+      state.control_flags.free_prompt_guard_reason === "missing_question" ||
+      state.control_flags.free_prompt_guard_reason === "none"
+        ? state.control_flags.free_prompt_guard_reason
+        : "none",
     free_gemini_status:
       state.control_flags.free_gemini_status === "ok" ||
       state.control_flags.free_gemini_status === "retry_ok" ||
@@ -1265,11 +1533,24 @@ async function handleUserMessage(state: LucySessionState, message: string, clien
     return runExtractionAndAdvance(cleared);
   }
 
+  const steering = estimateSteeringSnapshot(next, text);
+  const nextLowSignalStreak = steering.latestHadSignal ? 0 : (next.control_flags.free_low_signal_streak ?? 0) + 1;
   const chatState = withFreeFlags(next, {
-    free_extraction_phase: "chat"
+    free_extraction_phase: "chat",
+    free_coverage_score: steering.coverageScore,
+    free_coverage_fields_estimated: steering.estimatedCoveredFields,
+    free_low_signal_streak: nextLowSignalStreak
   });
-  const generated = await generateLucyReply(chatState, text);
+  const generated = await generateLucyReply(chatState, text, steering);
   const providerUsed = generated.providerUsed;
+  const guardedReply =
+    providerUsed === "none"
+      ? { content: generated.content, reason: "none" as PromptGuardReason }
+      : applyPromptGuard(chatState, generated.content, text, steering);
+  const wrapNudge = shouldShowWrapNudge(chatState, steering);
+  const finalContent = wrapNudge
+    ? `${guardedReply.content} If this feels accurate, you can tap “I’m done” any time.`
+    : guardedReply.content;
   const withReplyFlags = withFreeFlags(chatState, {
     free_gemini_status: generated.geminiStatus,
     free_gemini_http_status: generated.geminiHttpStatus ?? undefined,
@@ -1277,10 +1558,14 @@ async function handleUserMessage(state: LucySessionState, message: string, clien
     free_gemini_block_reason: generated.geminiBlockReason ?? undefined,
     free_gemini_error_code: generated.geminiErrorCode ?? undefined,
     provider_used_last_turn: providerUsed,
-    fallback_reason: generated.fallbackReason
+    fallback_reason: generated.fallbackReason,
+    free_prompt_guard_hits:
+      (chatState.control_flags.free_prompt_guard_hits ?? 0) + (guardedReply.reason === "none" ? 0 : 1),
+    free_prompt_guard_reason: guardedReply.reason,
+    free_wrap_nudge_shown: wrapNudge ? true : Boolean(chatState.control_flags.free_wrap_nudge_shown)
   });
 
-  return addAssistantMessage(withReplyFlags, generated.content, "normal");
+  return addAssistantMessage(withReplyFlags, finalContent, "normal");
 }
 
 async function handleFinish(state: LucySessionState): Promise<LucySessionState> {
@@ -1367,7 +1652,14 @@ export function buildLucySessionViewFree(state: LucySessionState): LucySessionVi
       extractionPhase: phase,
       missingFields: missing,
       manualGapField: manualField,
-      manualGapOptions: manualField ? (QUICK_OPTIONS[manualField] ?? []) : undefined
+      manualGapOptions: manualField ? (QUICK_OPTIONS[manualField] ?? []) : undefined,
+      coverageScore: withFlags.control_flags.free_coverage_score ?? 0,
+      wrapNudgeEligible:
+        !withFlags.control_flags.free_wrap_nudge_shown &&
+        userTurns >= 10 &&
+        (withFlags.control_flags.free_coverage_score ?? 0) >= 78 &&
+        missing.length <= 2,
+      lowSignalStreak: withFlags.control_flags.free_low_signal_streak ?? 0
     },
     promptOptions: manualField ? (QUICK_OPTIONS[manualField] ?? []) : [],
     canSubmit
