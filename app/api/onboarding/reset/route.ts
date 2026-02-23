@@ -23,6 +23,7 @@ export async function POST(request: Request) {
 
   const supabase = await createServerSupabaseClient();
   await Promise.all([
+    supabase.from("lucy_onboarding_sessions").delete().eq("user_id", user.id),
     supabase.from("onboarding_drafts").delete().eq("user_id", user.id),
     supabase.from("onboarding_progress").delete().eq("user_id", user.id),
     supabase.from("onboarding_profiles").delete().eq("user_id", user.id),

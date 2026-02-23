@@ -1,572 +1,323 @@
 "use client";
 
-import { type CSSProperties, useEffect, useMemo, useState } from "react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import { withCsrfHeaders } from "@/components/auth/csrf";
-import { trackUxEvent } from "@/lib/observability/uxClient";
-import {
-  deriveAttachmentAxis,
-  deriveReadinessScore,
-  type ConflictSpeed,
-  type EmotionalOpenness,
-  type GrowthIntention,
-  type LifestyleEnergy,
-  type LoveExpression,
-  type PastAttribution,
-  type RelationshipVision,
-  type RelationalStrength,
-  type SupportNeed,
-  type UserCompatibilityProfile
-} from "@/lib/compatibility";
+import { trackUxEvent, type UxPayload } from "@/lib/observability/uxClient";
+import type { LucyAnswers, LucyOption, LucySessionView } from "@/lib/onboarding/lucy/types";
 
-type QuestionType = "cards" | "spectrum" | "rank";
-
-type QuestionOption<T extends string | number> = {
-  label: string;
-  desc: string;
-  value: T;
+type LucySessionResponse = {
+  session: LucySessionView;
 };
 
-type QuestionDef<T extends string | number> = {
-  id: keyof OnboardingAnswers;
-  dimension: string;
-  dimensionColor: string;
-  prompt: string;
-  question: string;
-  type: QuestionType;
-  leftLabel?: string;
-  rightLabel?: string;
-  options: Array<QuestionOption<T>>;
-  instruction?: string;
-  maxSelect?: number;
-  insight: string;
-  isBonus?: boolean;
-};
-
-type OnboardingAnswers = {
-  past_attribution?: PastAttribution;
-  conflict_speed?: ConflictSpeed;
-  love_expression?: LoveExpression[];
-  support_need?: SupportNeed;
-  emotional_openness?: EmotionalOpenness;
-  relationship_vision?: RelationshipVision;
-  relational_strengths?: RelationalStrength[];
-  growth_intention?: GrowthIntention;
-  lifestyle_energy?: LifestyleEnergy;
-};
-
-type ProgressResponse = {
-  progress: {
-    current_step: number;
-    completed: boolean;
-    total_steps: number;
-    mode: "deep";
-  };
-  draft: Partial<OnboardingAnswers>;
-};
-
-const questions: Array<QuestionDef<string | number>> = [
-  {
-    id: "past_attribution",
-    dimension: "Past Reflection",
-    dimensionColor: "#BA4E3D",
-    prompt: "First question. When a past relationship ended, what was really going on?",
-    question: "When a past relationship ended, what do you feel was the core issue?",
-    type: "cards",
-    options: [
-      { label: "Different directions", desc: "We wanted different things long-term", value: "misaligned_goals" },
-      { label: "Communication", desc: "We struggled to talk through conflict", value: "conflict_comm" },
-      { label: "Emotional distance", desc: "I felt unseen or disconnected", value: "emotional_disconnect" },
-      { label: "Need for space", desc: "I needed more independence", value: "autonomy" },
-      { label: "Timing & life", desc: "External circumstances got in the way", value: "external" }
-    ],
-    insight: "This reveals how you interpret your past, which is a direct signal of growth readiness."
-  },
-  {
-    id: "conflict_speed",
-    dimension: "Conflict Style",
-    dimensionColor: "#AF6B2D",
-    prompt: "Let's talk about fighting. Everyone does it - the question is how.",
-    question: "In a disagreement with someone you love, what do you tend to do first?",
-    type: "spectrum",
-    leftLabel: "Talk it through immediately",
-    rightLabel: "Need space to process first",
-    options: [
-      { label: "Talk now", value: 1, desc: "I want to resolve things in the moment" },
-      { label: "Lean in", value: 2, desc: "I engage fairly quickly but warm up first" },
-      { label: "Middle path", value: 3, desc: "Depends on the situation and my energy" },
-      { label: "Step back", value: 4, desc: "I usually need a beat before I can engage well" },
-      { label: "Space first", value: 5, desc: "I need significant time alone before I can talk" }
-    ],
-    insight: "Conflict style compatibility is one of the strongest predictors of relationship durability."
-  },
-  {
-    id: "love_expression",
-    dimension: "Love Expression",
-    dimensionColor: "#2E8E65",
-    prompt: "How do you show someone you love them? Not what you should say - what you naturally do.",
-    question: "How do you naturally express love to someone you care about?",
-    type: "rank",
-    options: [
-      { label: "Acts of care", desc: "Doing things to make their life easier", value: "acts" },
-      { label: "Quality presence", desc: "Full, undivided attention and time", value: "time" },
-      { label: "Words & affirmation", desc: "Saying exactly how I feel, often", value: "words" },
-      { label: "Physical closeness", desc: "Touch, warmth, physical presence", value: "physical" },
-      { label: "Thoughtful surprises", desc: "Gestures that show I was thinking of them", value: "gifts" }
-    ],
-    instruction: "Pick your top 2",
-    maxSelect: 2,
-    insight: "We match on expression patterns and emotional responsiveness, not just labels."
-  },
-  {
-    id: "support_need",
-    dimension: "Support Needs",
-    dimensionColor: "#4A7A8D",
-    prompt: "When life gets hard and stress spikes, what do you need most from your partner?",
-    question: "When you're stressed or going through something hard, what do you need from a partner?",
-    type: "cards",
-    options: [
-      { label: "Just listen", desc: "I need to feel heard, not fixed", value: "validation" },
-      { label: "Help me solve it", desc: "Take something off my plate", value: "practical" },
-      { label: "Be close", desc: "Physical presence and warmth", value: "presence" },
-      { label: "Give me space", desc: "Then gently check in later", value: "space" },
-      { label: "Distract me", desc: "Help me get out of my head", value: "distraction" }
-    ],
-    insight: "Support mismatch can create friction even when emotional chemistry is strong."
-  },
-  {
-    id: "emotional_openness",
-    dimension: "Emotional Openness",
-    dimensionColor: "#8D6B4F",
-    prompt: "Real talk: how comfortable are you with emotional vulnerability in a relationship?",
-    question: "How comfortable are you with emotional vulnerability in a relationship?",
-    type: "spectrum",
-    leftLabel: "Very open - I share deeply",
-    rightLabel: "More private - I keep things close",
-    options: [
-      { label: "Very open", value: 1, desc: "I share naturally and crave emotional depth" },
-      { label: "Open with trust", value: 2, desc: "I open up slowly but fully once safe" },
-      { label: "Working on it", value: 3, desc: "I want more openness than comes naturally" },
-      { label: "Selective", value: 4, desc: "I'm private but can open up with the right person" },
-      { label: "Self-contained", value: 5, desc: "I prefer to manage most emotions internally" }
-    ],
-    insight: "Emotional availability is one of the most powerful predictors of relationship satisfaction."
-  },
-  {
-    id: "relationship_vision",
-    dimension: "Relationship Vision",
-    dimensionColor: "#E06A56",
-    prompt: "What does a healthy relationship look like to you in ordinary everyday life?",
-    question: "What does a truly healthy relationship look like to you in everyday life?",
-    type: "cards",
-    options: [
-      { label: "Independent together", desc: "Two whole people who actively choose each other", value: "independent" },
-      { label: "Deeply intertwined", desc: "Each other's anchor through everything", value: "enmeshed" },
-      { label: "Best friendship", desc: "Deep friendship with romantic depth", value: "friendship" },
-      { label: "Safe harbour", desc: "A calm, peaceful space from the world", value: "safe" },
-      { label: "Shared adventure", desc: "Growing, building, and exploring together", value: "adventure" }
-    ],
-    insight: "Goal alignment predicts long-term success more than surface-level personality matching."
-  },
-  {
-    id: "relational_strengths",
-    dimension: "Self-Awareness",
-    dimensionColor: "#6F7B56",
-    prompt:
-      "What did you bring to past relationships that you're genuinely proud of? And don't say nothing - we won't believe you.",
-    question: "Looking back, what did you bring to past relationships that you're genuinely proud of?",
-    type: "rank",
-    options: [
-      { label: "Consistency", desc: "I show up and follow through", value: "consistency" },
-      { label: "Loyalty", desc: "People feel safe and secure with me", value: "loyalty" },
-      { label: "Honesty", desc: "I communicate openly, even when it's hard", value: "honesty" },
-      { label: "Joy", desc: "I bring lightness, laughter, and spontaneity", value: "joy" },
-      { label: "Championing", desc: "I cheer for people's growth and dreams", value: "support" }
-    ],
-    instruction: "Pick your top 2",
-    maxSelect: 2,
-    insight: "Self-compassion and self-awareness are both linked to stronger partnerships."
-  },
-  {
-    id: "growth_intention",
-    dimension: "Growth Intention",
-    dimensionColor: "#BA4E3D",
-    prompt: "Last one: what's the one thing you most want to be different next time?",
-    question: "What's the one thing you most want to be different in your next relationship?",
-    type: "cards",
-    options: [
-      { label: "Deeper honesty", desc: "More emotional depth and real communication", value: "depth" },
-      { label: "Better balance", desc: "Togetherness and personal space in harmony", value: "balance" },
-      { label: "Being chosen", desc: "A partner who actively picks me, consistently", value: "chosen" },
-      { label: "Less conflict", desc: "More calm, more mutual respect", value: "peace" },
-      { label: "Real alignment", desc: "Same vision for life and what we're building", value: "alignment" }
-    ],
-    insight: "This is your growth signal and helps us weight what matters most for your next chapter."
-  },
-  {
-    id: "lifestyle_energy",
-    dimension: "Lifestyle",
-    dimensionColor: "#2E8E65",
-    prompt: "Bonus question: if your ideal Saturday night was a movie genre, what would it be?",
-    question: "If your ideal Saturday night was a movie genre, what would it be?",
-    type: "cards",
-    options: [
-      { label: "Quiet indie film", desc: "Calm, introspective, small gathering", value: "introspective" },
-      { label: "Action blockbuster", desc: "High energy, excitement, stimulation", value: "high_energy" },
-      { label: "Rom-com marathon", desc: "Lighthearted, social, laughter-filled", value: "social" },
-      { label: "Documentary deep-dive", desc: "Curious, learning-focused, engaged", value: "intellectual" },
-      { label: "Whatever's playing", desc: "Spontaneous, go-with-the-flow, adaptable", value: "spontaneous" }
-    ],
-    insight: "Lifestyle pace is a major compatibility layer that often gets ignored on dating apps.",
-    isBonus: true
-  }
-];
-
-function hasAnswer(answer: OnboardingAnswers[keyof OnboardingAnswers] | undefined): boolean {
-  if (Array.isArray(answer)) {
-    return answer.length > 0;
-  }
-  return answer !== undefined && answer !== null;
+function sanitizeBubbleContent(content: string): string {
+  return content.replace(/[ \t]+\n/g, "\n").replace(/\s+$/u, "");
 }
 
-function getLivePreviewText(answers: OnboardingAnswers): string {
-  const traits: string[] = [];
-  const loveSet = new Set(answers.love_expression ?? []);
-  if (loveSet.has("time")) traits.push("value quality presence");
-  if (loveSet.has("acts")) traits.push("show care through practical support");
-  if (loveSet.has("words")) traits.push("communicate feelings clearly");
-  if (answers.relationship_vision === "adventure") traits.push("want a relationship that feels like a shared adventure");
-  if (answers.relationship_vision === "safe") traits.push("prefer a calm, stable relationship rhythm");
-
-  if (traits.length === 0) {
-    return "Based on your answers so far, you're most compatible with people who match your emotional pacing and support style.";
-  }
-  if (traits.length === 1) {
-    return `Based on your answers so far, you're most compatible with people who ${traits[0]}.`;
-  }
-  return `Based on your answers so far, you're most compatible with people who ${traits[0]} and ${traits[1]}.`;
-}
-
-function DimensionPill({ label, color }: { label: string; color: string }) {
-  return (
-    <div className="onboarding-dimension-pill" style={{ "--dimension-color": color } as CSSProperties}>
-      <span className="onboarding-dimension-dot" aria-hidden="true" />
-      {label}
-    </div>
+function isSubmissionReady(answers: Partial<LucyAnswers>): answers is LucyAnswers {
+  return Boolean(
+    answers.past_attribution &&
+      answers.conflict_speed &&
+      answers.support_need &&
+      answers.emotional_openness &&
+      answers.love_expression &&
+      answers.love_expression.length >= 1 &&
+      answers.relationship_vision &&
+      answers.relational_strengths &&
+      answers.relational_strengths.length >= 1 &&
+      answers.growth_intention
   );
 }
 
-function CardOption({
-  option,
-  selected,
-  onClick,
-  disabled = false
-}: {
-  option: QuestionOption<string | number>;
-  selected: boolean;
-  onClick: () => void;
-  disabled?: boolean;
-}) {
-  return (
-    <button
-      type="button"
-      className={`onboarding-option${selected ? " active" : ""}`}
-      onClick={onClick}
-      disabled={disabled && !selected}
-      aria-pressed={selected}
-    >
-      <span className="onboarding-option-content">
-        <strong>{option.label}</strong>
-        <span>{option.desc}</span>
-      </span>
-      <span className={`onboarding-option-check${selected ? " active" : ""}`} aria-hidden="true" />
-    </button>
-  );
-}
-
-function SpectrumQuestion({
-  q,
-  value,
-  onChange
-}: {
-  q: QuestionDef<string | number>;
-  value?: number;
-  onChange: (value: number) => void;
-}) {
-  const selected = q.options.find((opt) => Number(opt.value) === value);
-
-  return (
-    <div className="onboarding-spectrum">
-      <div className="onboarding-spectrum-labels">
-        <span>{q.leftLabel}</span>
-        <span>{q.rightLabel}</span>
-      </div>
-      <div className="onboarding-spectrum-grid" role="radiogroup" aria-label={q.question}>
-        {q.options.map((opt) => {
-          const optionValue = Number(opt.value);
-          const isSelected = value === optionValue;
-          return (
-            <button
-              key={`${q.id}-${String(opt.value)}`}
-              type="button"
-              role="radio"
-              aria-checked={isSelected}
-              className={`onboarding-scale-button${isSelected ? " active" : ""}`}
-              onClick={() => onChange(optionValue)}
-            >
-              <span className="onboarding-scale-number">{opt.value}</span>
-              <span className="onboarding-scale-label">{opt.label}</span>
-            </button>
-          );
-        })}
-      </div>
-      {selected ? <p className="onboarding-helper">{selected.desc}</p> : null}
-    </div>
-  );
-}
-
-function RankQuestion({
-  q,
-  selected,
-  onToggle
-}: {
-  q: QuestionDef<string | number>;
-  selected: string[];
-  onToggle: (value: string) => void;
-}) {
-  const max = q.maxSelect || 2;
-  return (
-    <div className="stack">
-      <p className="onboarding-helper">
-        <strong>{selected.length}/{max}</strong> selected{q.instruction ? ` - ${q.instruction}` : ""}
-      </p>
-      <div className="stack">
-        {q.options.map((opt) => {
-          const value = String(opt.value);
-          const isSelected = selected.includes(value);
-          const isDisabled = !isSelected && selected.length >= max;
-          return (
-            <CardOption
-              key={`${q.id}-${value}`}
-              option={opt}
-              selected={isSelected}
-              onClick={() => onToggle(value)}
-              disabled={isDisabled}
-            />
-          );
-        })}
-      </div>
-    </div>
-  );
-}
-
-function SummaryScreen({ onContinue }: { onContinue: () => void }) {
-  return (
-    <section className="onboarding-summary panel stack">
-      <p className="eyebrow">Your Relationship DNA</p>
-      <h1>Your profile is complete.</h1>
-      <p className="muted">
-        We now have enough signal to show matches with meaningful fit and clear coaching guidance.
-      </p>
-      <div className="onboarding-summary-grid">
-        <article className="prompt-card">
-          <h3>Emotional style</h3>
-          <p className="small">Matched on openness rhythm, support needs, and attachment pacing.</p>
-        </article>
-        <article className="prompt-card">
-          <h3>Conflict rhythm</h3>
-          <p className="small">You will see where conflict speed naturally aligns and where it needs structure.</p>
-        </article>
-        <article className="prompt-card">
-          <h3>Life direction</h3>
-          <p className="small">Vision and growth intent are prioritized over shallow profile noise.</p>
-        </article>
-      </div>
-      <div className="actions">
-        <button type="button" onClick={onContinue}>Continue to profile setup</button>
-      </div>
-    </section>
-  );
-}
-
-export function OnboardingFlow({
-  userId,
-  onComplete
-}: {
-  userId: string;
-  onComplete?: (profile: UserCompatibilityProfile) => void;
-}) {
+export function OnboardingFlow({ userId }: { userId: string }) {
   const router = useRouter();
-  const [currentQ, setCurrentQ] = useState(0);
-  const [answers, setAnswers] = useState<OnboardingAnswers>({});
-  const [done, setDone] = useState(false);
+  const threadRef = useRef<HTMLDivElement | null>(null);
+  const [session, setSession] = useState<LucySessionView | null>(null);
   const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
+  const [sending, setSending] = useState(false);
+  const [completing, setCompleting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [input, setInput] = useState("");
+  const isFreeMode = session?.freeMode?.enabled ?? false;
 
-  const q = questions[currentQ] ?? questions[0]!;
-  const readyForNext = hasAnswer(answers[q.id]);
-
-  const completedProfile = useMemo<UserCompatibilityProfile | null>(() => {
-    if (
-      !answers.past_attribution ||
-      !answers.conflict_speed ||
-      !answers.love_expression ||
-      !answers.support_need ||
-      !answers.emotional_openness ||
-      !answers.relationship_vision ||
-      !answers.relational_strengths ||
-      !answers.growth_intention ||
-      !answers.lifestyle_energy
-    ) {
-      return null;
-    }
-
-    const baseProfile = {
-      userId,
-      past_attribution: answers.past_attribution,
-      conflict_speed: answers.conflict_speed,
-      love_expression: answers.love_expression,
-      support_need: answers.support_need,
-      emotional_openness: answers.emotional_openness,
-      relationship_vision: answers.relationship_vision,
-      relational_strengths: answers.relational_strengths,
-      growth_intention: answers.growth_intention,
-      lifestyle_energy: answers.lifestyle_energy,
-      attachment_axis: "secure" as const,
-      completedAt: new Date()
-    };
-
-    const attachmentAxis = deriveAttachmentAxis({
-      ...baseProfile,
-      readiness_score: 0
-    });
-    const readiness = deriveReadinessScore({
-      ...baseProfile,
-      attachment_axis: attachmentAxis
-    });
-
+  function telemetryContext(view: LucySessionView | null): UxPayload {
+    const telemetry = view?.telemetry;
     return {
-      ...baseProfile,
-      attachment_axis: attachmentAxis,
-      readiness_score: readiness
+      variant: telemetry?.variant ?? view?.controlFlags.experiment_variant ?? "unknown",
+      turn_number: telemetry?.turn_number ?? view?.messages.filter((message) => message.role === "user").length ?? 0,
+      stage_or_thread: telemetry?.stage_or_thread ?? view?.currentStage ?? "unknown",
+      session_id: telemetry?.session_id ?? "unknown",
+      model_version: telemetry?.model_version ?? view?.controlFlags.model_version ?? "unknown",
+      prompt_version: telemetry?.prompt_version ?? view?.controlFlags.prompt_version ?? "unknown",
+      understanding_source: telemetry?.understanding_source ?? view?.controlFlags.last_understanding_source ?? "rule",
+      fallback_reason: telemetry?.fallback_reason ?? view?.controlFlags.fallback_reason ?? "none",
+      provider_used: telemetry?.provider_used ?? view?.controlFlags.provider_used_last_turn ?? "none",
+      llm_latency_ms: telemetry?.llm_latency_ms ?? view?.controlFlags.last_llm_latency_ms ?? null,
+      schema_validation_failed: telemetry?.schema_validation_failed ?? view?.controlFlags.schema_validation_failed ?? false,
+      user_confusion_turn: telemetry?.user_confusion_turn ?? view?.controlFlags.user_confusion_turn ?? false,
+      challenge_detected: telemetry?.challenge_detected ?? view?.controlFlags.challenge_detected_turn ?? false,
+      dispute_resolved: telemetry?.dispute_resolved ?? view?.controlFlags.dispute_resolved_turn ?? false,
+      stage_jump_after_dispute:
+        telemetry?.stage_jump_after_dispute ?? view?.controlFlags.stage_jump_after_dispute_turn ?? false,
+      explanation_requested:
+        telemetry?.explanation_requested ?? view?.controlFlags.explanation_requested_turn ?? false,
+      topic_switch_detected:
+        telemetry?.topic_switch_detected ?? view?.controlFlags.topic_switch_detected_turn ?? false,
+      pending_confirmation_attempts: view?.controlFlags.pending_confirmation_attempts ?? 0,
+      confirmation_loop_count: view?.controlFlags.confirmation_loop_count ?? 0,
+      lead_field_jump_count: view?.controlFlags.lead_field_jump_count ?? 0,
+      stale_pending_reset_count: view?.controlFlags.stale_pending_reset_count ?? 0,
+      repeat_prompt_guard_triggered:
+        telemetry?.repeat_prompt_guard_triggered ??
+        ((view?.controlFlags.repeat_prompt_guard_hits ?? 0) > 0)
     };
-  }, [answers, userId]);
+  }
+
+  const stageTitle = useMemo(() => {
+    if (!session) return "Lucy";
+    if (session.progress.stage_number === 0) return "Lucy • Getting started";
+    if (session.currentStage === "closing") return "Lucy • Summary";
+    return `Lucy • Stage ${session.progress.stage_number}/${session.progress.total_stages}`;
+  }, [session]);
 
   useEffect(() => {
-    let cancelled = false;
+    if (!threadRef.current) return;
+    threadRef.current.scrollTop = threadRef.current.scrollHeight;
+  }, [session?.messages.length, sending]);
 
-    async function hydrate() {
-      setLoading(true);
-      setError(null);
-      const response = await fetch("/api/onboarding/progress", { cache: "no-store" });
+  const loadSession = useCallback(async () => {
+    setLoading(true);
+    setError(null);
+    try {
+      const response = await fetch("/api/onboarding/lucy/session", { cache: "no-store" });
       if (!response.ok) {
-        if (!cancelled) {
-          setError("Could not load onboarding progress.");
-          setLoading(false);
-        }
-        return;
+        throw new Error("Could not load Lucy onboarding session.");
       }
-
-      const payload = (await response.json()) as ProgressResponse;
-      if (cancelled) return;
-
-      const draft = payload.draft ?? {};
-      setAnswers({
-        past_attribution: draft.past_attribution as PastAttribution | undefined,
-        conflict_speed: draft.conflict_speed as ConflictSpeed | undefined,
-        love_expression: draft.love_expression as LoveExpression[] | undefined,
-        support_need: draft.support_need as SupportNeed | undefined,
-        emotional_openness: draft.emotional_openness as EmotionalOpenness | undefined,
-        relationship_vision: draft.relationship_vision as RelationshipVision | undefined,
-        relational_strengths: draft.relational_strengths as RelationalStrength[] | undefined,
-        growth_intention: draft.growth_intention as GrowthIntention | undefined,
-        lifestyle_energy: draft.lifestyle_energy as LifestyleEnergy | undefined
+      const payload = (await response.json()) as LucySessionResponse;
+      setSession(payload.session);
+      trackUxEvent("lucy_onboarding_viewed", {
+        userIdPresent: Boolean(userId),
+        ...telemetryContext(payload.session)
       });
-      setCurrentQ(Math.max(0, Math.min((payload.progress.current_step ?? 1) - 1, questions.length - 1)));
-      setDone(Boolean(payload.progress.completed));
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not load Lucy onboarding session.");
+    } finally {
       setLoading(false);
     }
-
-    void hydrate();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  }, [userId]);
 
   useEffect(() => {
-    if (loading) return;
-    trackUxEvent("onboarding_step_viewed", { step: currentQ + 1 });
-  }, [currentQ, loading]);
+    void loadSession();
+  }, [loadSession]);
 
-  function handleAnswer(value: string | number | string[]) {
-    setAnswers((prev) => ({ ...prev, [q.id]: value }));
-  }
-
-  async function persistStep(nextStep: number, value: string | number | string[]) {
-    const response = await fetch("/api/onboarding/answer", {
-      method: "POST",
-      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({
-        questionId: q.id,
-        value,
-        currentStep: currentQ + 1,
-        nextStep,
-        totalSteps: questions.length,
-        mode: "deep"
-      })
-    });
-
-    if (!response.ok) {
-      const payload = (await response.json().catch(() => null)) as { error?: string } | null;
-      throw new Error(payload?.error ?? "Could not save answer.");
-    }
-  }
-
-  async function goNext() {
-    if (!readyForNext) return;
-    const value = answers[q.id];
-    if (value === undefined) return;
-
-    setSaving(true);
+  async function sendMessage(message: string, action: "send" | "switch_quick_mode" = "send") {
+    setSending(true);
     setError(null);
-
+    const previousSession = session;
+    const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
     try {
-      const nextStep = Math.min(questions.length, currentQ + 2);
-      await persistStep(nextStep, value as string | number | string[]);
-      trackUxEvent("onboarding_step_saved", { step: currentQ + 1 });
+      const response = await fetch("/api/onboarding/lucy/message", {
+        method: "POST",
+        headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          action,
+          message,
+          clientMessageId: typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : String(Date.now())
+        })
+      });
 
-      if (currentQ < questions.length - 1) {
-        setCurrentQ((prev) => prev + 1);
-      } else {
-        setDone(true);
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Could not send message.");
+      }
+
+      const payload = (await response.json()) as LucySessionResponse;
+      setSession(payload.session);
+      setInput("");
+      const base = telemetryContext(payload.session);
+      const lastAssistantMessage = [...payload.session.messages].reverse().find((entry) => entry.role === "assistant");
+      const latencyMs = Math.round((typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt);
+
+      trackUxEvent("lucy_message_sent", {
+        stage: payload.session.currentStage,
+        ...base
+      });
+
+      trackUxEvent("lucy_response_generated", {
+        intent: lastAssistantMessage?.kind ?? "normal",
+        latency_ms: latencyMs,
+        repeat_prompt_guard_triggered:
+          (payload.session.controlFlags.repeat_prompt_guard_hits ?? 0) >
+          (previousSession?.controlFlags.repeat_prompt_guard_hits ?? 0),
+        ...base
+      });
+
+      const previousEnvelopes = previousSession?.extractionEnvelopes ?? {};
+      const nextEnvelopes = payload.session.extractionEnvelopes ?? {};
+      for (const [field, envelope] of Object.entries(nextEnvelopes)) {
+        if (!envelope) continue;
+        const before = previousEnvelopes[field as keyof typeof previousEnvelopes];
+        if (JSON.stringify(before) === JSON.stringify(envelope)) continue;
+        const confidence = envelope.confidence;
+        trackUxEvent("lucy_signal_extracted", {
+          field,
+          confidence_bucket: confidence >= 80 ? "high" : confidence >= 60 ? "medium" : "low",
+          signal_type: envelope.source === "quick_mode" ? "direct_self_statement" : envelope.source === "inferred" ? "meta_signal" : "story_inference",
+          speaker_scope: envelope.speaker_scope ?? "unknown",
+          timeframe: envelope.timeframe ?? "unknown",
+          evidence_span_count: envelope.evidence_spans?.length ?? 0,
+          ...base
+        });
+      }
+
+      const quickModeAccepted = action === "switch_quick_mode" || (!previousSession?.quickMode && payload.session.quickMode);
+      if (quickModeAccepted) {
+        trackUxEvent("lucy_quick_mode_accepted", base);
+      }
+
+      if (lastAssistantMessage?.kind === "redirect" && /switch to quick questions/i.test(lastAssistantMessage.content)) {
+        trackUxEvent("lucy_quick_mode_offered", base);
+      }
+
+      const confirmationAsked =
+        lastAssistantMessage?.kind === "clarification" &&
+        (lastAssistantMessage.options?.some((option) => option.value === "yes") ?? false) &&
+        (lastAssistantMessage.options?.some((option) => option.value === "no") ?? false);
+      if (confirmationAsked) {
+        trackUxEvent("lucy_confirmation_asked", {
+          reason: "medium_confidence_or_ambiguity",
+          ...base
+        });
+      }
+
+      if (lastAssistantMessage?.kind === "summary") {
+        trackUxEvent("lucy_synthesis_shown", base);
+      }
+
+      if (
+        lastAssistantMessage?.kind === "clarification" &&
+        /still need one or two answers|fill the missing pieces/i.test(lastAssistantMessage.content)
+      ) {
+        const filledCount = Object.values(payload.session.requiredAnswers).filter((value) => {
+          if (Array.isArray(value)) return value.length > 0;
+          return value !== undefined && value !== null;
+        }).length;
+        trackUxEvent("lucy_gap_fill_started", {
+          missing_fields_count: Math.max(0, 8 - filledCount),
+          ...base
+        });
+      }
+
+      if (!previousSession?.controlFlags.safety_flag && payload.session.controlFlags.safety_flag) {
+        trackUxEvent("lucy_safety_triggered", {
+          type: "flagged",
+          ...base
+        });
       }
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "Could not save answer.");
+      setError(cause instanceof Error ? cause.message : "Could not send message.");
     } finally {
-      setSaving(false);
+      setSending(false);
     }
+  }
+
+  async function sendFreeAction(action: "send" | "finish", message = "") {
+    setSending(true);
+    setError(null);
+    const previousSession = session;
+    const startedAt = typeof performance !== "undefined" ? performance.now() : Date.now();
+    try {
+      const response = await fetch("/api/onboarding/lucy/message", {
+        method: "POST",
+        headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
+        body: JSON.stringify({
+          action,
+          message,
+          clientMessageId: typeof crypto !== "undefined" && typeof crypto.randomUUID === "function" ? crypto.randomUUID() : String(Date.now())
+        })
+      });
+
+      if (!response.ok) {
+        const payload = (await response.json().catch(() => null)) as { error?: string } | null;
+        throw new Error(payload?.error ?? "Could not send message.");
+      }
+
+      const payload = (await response.json()) as LucySessionResponse;
+      setSession(payload.session);
+      setInput("");
+
+      const latencyMs = Math.round((typeof performance !== "undefined" ? performance.now() : Date.now()) - startedAt);
+      trackUxEvent("lucy_free_turn_processed", {
+        action,
+        latency_ms: latencyMs,
+        extraction_phase: payload.session.freeMode?.extractionPhase ?? "chat",
+        turn_number: payload.session.freeMode?.userTurnCount ?? 0,
+        gemini_status: payload.session.controlFlags.free_gemini_status ?? "none"
+      });
+
+      if (action === "finish") {
+        trackUxEvent("lucy_final_extraction_run", {
+          missing_fields_count: payload.session.freeMode?.missingFields.length ?? 0
+        });
+      }
+
+      if (
+        previousSession?.freeMode?.extractionPhase !== "followup" &&
+        payload.session.freeMode?.extractionPhase === "followup"
+      ) {
+        trackUxEvent("lucy_final_extraction_followup_requested", {
+          missing_fields_count: payload.session.freeMode?.missingFields.length ?? 0
+        });
+      }
+
+      if (
+        previousSession?.freeMode?.extractionPhase !== "manual_gap_fill" &&
+        payload.session.freeMode?.extractionPhase === "manual_gap_fill"
+      ) {
+        trackUxEvent("lucy_manual_gap_fill_started", {
+          field: payload.session.freeMode?.manualGapField ?? "unknown"
+        });
+      }
+
+      if (!previousSession?.canSubmit && payload.session.canSubmit) {
+        trackUxEvent("lucy_free_onboarding_ready_to_complete", {});
+      }
+
+    } catch (cause) {
+      setError(cause instanceof Error ? cause.message : "Could not send message.");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!input.trim() || sending) return;
+    if (isFreeMode) {
+      await sendFreeAction("send", input.trim());
+      return;
+    }
+    await sendMessage(input.trim(), "send");
   }
 
   async function completeOnboarding() {
-    if (!completedProfile || saving) return;
+    if (!session || !session.canSubmit || !isSubmissionReady(session.requiredAnswers) || completing) return;
 
-    setSaving(true);
+    setCompleting(true);
     setError(null);
     try {
       const response = await fetch("/api/onboarding/complete", {
         method: "POST",
         headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
         body: JSON.stringify({
-          past_attribution: completedProfile.past_attribution,
-          conflict_speed: completedProfile.conflict_speed,
-          love_expression: completedProfile.love_expression,
-          support_need: completedProfile.support_need,
-          emotional_openness: completedProfile.emotional_openness,
-          relationship_vision: completedProfile.relationship_vision,
-          relational_strengths: completedProfile.relational_strengths,
-          growth_intention: completedProfile.growth_intention,
-          lifestyle_energy: completedProfile.lifestyle_energy
+          past_attribution: session.requiredAnswers.past_attribution,
+          conflict_speed: session.requiredAnswers.conflict_speed,
+          support_need: session.requiredAnswers.support_need,
+          emotional_openness: session.requiredAnswers.emotional_openness,
+          love_expression: session.requiredAnswers.love_expression,
+          relationship_vision: session.requiredAnswers.relationship_vision,
+          relational_strengths: session.requiredAnswers.relational_strengths,
+          growth_intention: session.requiredAnswers.growth_intention
         })
       });
 
@@ -575,131 +326,136 @@ export function OnboardingFlow({
         throw new Error(payload?.error ?? "Could not complete onboarding.");
       }
 
-      onComplete?.(completedProfile);
-      trackUxEvent("onboarding_completed");
+      trackUxEvent("onboarding_completed", {
+        flow: "lucy",
+        usedQuickMode: session.quickMode,
+        ...telemetryContext(session)
+      });
       router.push("/profile/setup");
+      router.refresh();
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : "Could not complete onboarding.");
     } finally {
-      setSaving(false);
+      setCompleting(false);
     }
-  }
-
-  async function goBack() {
-    if (currentQ === 0) return;
-
-    const previousStep = currentQ;
-    setCurrentQ((prev) => prev - 1);
-    await fetch("/api/onboarding/progress", {
-      method: "POST",
-      headers: await withCsrfHeaders({ "Content-Type": "application/json" }),
-      body: JSON.stringify({
-        currentStep: previousStep,
-        totalSteps: questions.length,
-        mode: "deep",
-        completed: false
-      })
-    }).catch(() => undefined);
   }
 
   if (loading) {
     return (
       <main className="public-main onboarding-main">
         <section className="panel">
-          <p className="muted">Loading onboarding...</p>
+          <p className="muted">Loading Lucy onboarding...</p>
         </section>
-      </main>
-    );
-  }
-
-  if (done && completedProfile) {
-    return (
-      <main className="public-main onboarding-main">
-        <SummaryScreen
-          onContinue={() => {
-            void completeOnboarding();
-          }}
-        />
       </main>
     );
   }
 
   return (
     <main className="public-main onboarding-main">
-      <section className="onboarding-shell">
-        <section className="panel onboarding-progress-panel">
-          <div className="onboarding-progress-top">
-            <p className="eyebrow">Onboarding</p>
-            <p className="tiny muted">{currentQ + 1} / {questions.length}</p>
-          </div>
-          <div className="onboarding-progress-track" role="progressbar" aria-valuemin={1} aria-valuemax={questions.length} aria-valuenow={currentQ + 1}>
-            <span className="onboarding-progress-fill" style={{ width: `${((currentQ + 1) / questions.length) * 100}%` }} />
-          </div>
-        </section>
-
-        <div className="onboarding-stack-wrap" key={q.id}>
-          <div className="onboarding-stack-layer layer-one" aria-hidden="true" />
-          <div className="onboarding-stack-layer layer-two" aria-hidden="true" />
-          <section className="panel onboarding-card">
-            <DimensionPill label={q.dimension} color={q.dimensionColor} />
-            <p className="onboarding-prompt">{q.prompt}</p>
-            {q.isBonus ? <p className="onboarding-bonus">Bonus question</p> : null}
-            <h2>{q.question}</h2>
-
-            <div className="onboarding-body">
-              {q.type === "cards" ? (
-                <div className="stack">
-                  {q.options.map((opt) => (
-                    <CardOption
-                      key={`${q.id}-${String(opt.value)}`}
-                      option={opt}
-                      selected={answers[q.id] === opt.value}
-                      onClick={() => handleAnswer(String(opt.value))}
-                    />
-                  ))}
-                </div>
-              ) : null}
-
-              {q.type === "spectrum" ? (
-                <SpectrumQuestion
-                  q={q}
-                  value={answers[q.id] as number | undefined}
-                  onChange={(value) => handleAnswer(value)}
-                />
-              ) : null}
-
-              {q.type === "rank" ? (
-                <RankQuestion
-                  q={q}
-                  selected={(answers[q.id] as string[] | undefined) ?? []}
-                  onToggle={(value) => {
-                    const current = ((answers[q.id] as string[] | undefined) ?? []).slice();
-                    if (current.includes(value)) {
-                      handleAnswer(current.filter((entry) => entry !== value));
-                      return;
-                    }
-                    if (current.length < (q.maxSelect ?? 2)) {
-                      handleAnswer([...current, value]);
-                    }
-                  }}
-                />
-              ) : null}
-
-              <p className="onboarding-insight">{q.insight}</p>
-              {currentQ >= 3 ? <p className="onboarding-preview">{getLivePreviewText(answers)} Let&apos;s keep going.</p> : null}
-              {error ? <p className="onboarding-error">{error}</p> : null}
+      <section className="lucy-shell panel">
+        {isFreeMode ? (
+          <header className="lucy-header">
+            <div className="lucy-header-row">
+              <p className="eyebrow">Lucy</p>
             </div>
+            <p className="tiny muted">Talk naturally. When you’re ready, tap “I’m done”.</p>
+          </header>
+        ) : (
+          <header className="lucy-header">
+            <div className="lucy-header-row">
+              <p className="eyebrow">{stageTitle}</p>
+              {session ? <p className="tiny muted">{session.progress.stage_label}</p> : null}
+            </div>
+            <div
+              className="onboarding-progress-track"
+              role="progressbar"
+              aria-valuemin={0}
+              aria-valuemax={100}
+              aria-valuenow={session?.progress.percent ?? 0}
+            >
+              <span className="onboarding-progress-fill" style={{ width: `${session?.progress.percent ?? 0}%` }} />
+            </div>
+            <p className="tiny muted">About 8 to 12 minutes total.</p>
+          </header>
+        )}
 
-            <footer className="onboarding-footer">
-              <button type="button" className="ghost" onClick={() => void goBack()} disabled={currentQ === 0 || saving}>
-                Back
-              </button>
-              <button type="button" onClick={() => void goNext()} disabled={!readyForNext || saving}>
-                {saving ? "Saving..." : currentQ === questions.length - 1 ? "See my matches" : "Continue"}
-              </button>
-            </footer>
-          </section>
+        <div className="lucy-thread" ref={threadRef}>
+          {session?.messages.map((msg) => (
+            <article
+              key={msg.id}
+              className={`lucy-bubble ${msg.role === "assistant" ? "assistant" : msg.role === "user" ? "user" : "system"}`}
+            >
+              <p>{sanitizeBubbleContent(msg.content)}</p>
+            </article>
+          ))}
+          {sending ? (
+            <article className="lucy-bubble assistant typing">
+              <p>Lucy is thinking...</p>
+            </article>
+          ) : null}
         </div>
+
+        {session?.promptOptions && session.promptOptions.length > 0 && !session.completed ? (
+          <div className="lucy-options" aria-label="Quick options">
+            {session.promptOptions.map((option: LucyOption) => (
+              <button
+                key={`${option.value}-${option.label}`}
+                type="button"
+                className="lucy-option-chip"
+                onClick={() => (isFreeMode ? void sendFreeAction("send", option.value) : void sendMessage(option.value))}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+        ) : null}
+
+        {error ? <p className="onboarding-error">{error}</p> : null}
+
+        {session?.completed && session.canSubmit ? (
+          <div className="lucy-complete-wrap">
+            <button type="button" onClick={() => void completeOnboarding()} disabled={completing}>
+              {completing ? "Finalizing..." : "Continue to profile setup"}
+            </button>
+          </div>
+        ) : (
+          <footer className="lucy-composer-wrap">
+            {isFreeMode && session?.freeMode?.extractionPhase === "chat" ? (
+              <button
+                type="button"
+                className="ghost"
+                disabled={sending || !(session?.freeMode?.doneEligible ?? false)}
+                onClick={() => void sendFreeAction("finish")}
+              >
+                {session?.freeMode?.doneEligible
+                  ? "I’m done"
+                  : `I’m done (${session?.freeMode?.userTurnCount ?? 0}/${session?.freeMode?.doneMinTurns ?? 8})`}
+              </button>
+            ) : null}
+            {!isFreeMode ? (
+              <button
+                type="button"
+                className="ghost"
+                disabled={sending}
+                onClick={() => void sendMessage("", "switch_quick_mode")}
+              >
+                Quick questions
+              </button>
+            ) : null}
+            <form className="lucy-composer" onSubmit={handleSubmit}>
+              <input
+                value={input}
+                onChange={(event) => setInput(event.target.value)}
+                placeholder="Type your response..."
+                disabled={sending}
+                maxLength={1000}
+              />
+              <button type="submit" disabled={sending || !input.trim()}>
+                Send
+              </button>
+            </form>
+          </footer>
+        )}
       </section>
     </main>
   );
