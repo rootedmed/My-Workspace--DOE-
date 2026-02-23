@@ -5,14 +5,13 @@ import { isValidCsrf } from "@/lib/security/csrf";
 import { applyRateLimit, getRequestIp } from "@/lib/security/rateLimit";
 import { assertWriteAllowed } from "@/lib/config/env.server";
 import { ensureAppUser } from "@/lib/auth/ensureAppUser";
-import { processLucyUserMessageConversational } from "@/lib/onboarding/lucy/conversationalEngine";
 import { buildLucySessionView, processLucyUserMessage, switchLucyQuickMode } from "@/lib/onboarding/lucy/engine";
 import {
   buildLucySessionViewFree,
   enableFreeConversationMode,
   processLucyFreeConversationAction
 } from "@/lib/onboarding/lucy/freeConversationEngine";
-import { isLucyFreeConversationDevEnabled } from "@/lib/onboarding/lucy/freeMode";
+import { resolveLucyOnboardingEngine } from "@/lib/onboarding/lucy/freeMode";
 import { ensureLucySession, saveLucySession } from "@/lib/onboarding/lucy/store";
 import type { LucyAnswerField, LucyMessage, LucySessionState } from "@/lib/onboarding/lucy/types";
 import { logStructured } from "@/lib/observability/logger";
@@ -71,10 +70,6 @@ function baseEventContext(state: LucySessionState) {
   };
 }
 
-function buildSessionView(state: LucySessionState) {
-  return state.control_flags.free_conversation_mode ? buildLucySessionViewFree(state) : buildLucySessionView(state);
-}
-
 export async function POST(request: Request) {
   try {
     assertWriteAllowed();
@@ -112,20 +107,13 @@ export async function POST(request: Request) {
 
   const existing = await ensureLucySession(user.id);
   const startedAtMs = Date.now();
-  const freeConversationEnabled = isLucyFreeConversationDevEnabled();
+  const resolvedEngine = resolveLucyOnboardingEngine();
+  const freeConversationEnabled = resolvedEngine === "free_chat";
   const existingForMode = freeConversationEnabled ? enableFreeConversationMode(existing) : existing;
 
   if (!freeConversationEnabled && payload.data.action === "finish") {
     return NextResponse.json({ error: "Finish action is not available in this mode." }, { status: 400 });
   }
-
-  const forceConversational =
-    ["1", "true", "yes", "on"].includes((process.env.LUCY_FORCE_CONVERSATIONAL ?? "").trim().toLowerCase());
-  const devUseAbTest =
-    ["1", "true", "yes", "on"].includes((process.env.LUCY_DEV_USE_AB_TEST ?? "").trim().toLowerCase());
-  const preferConversationalInDev = process.env.NODE_ENV !== "production" && !devUseAbTest;
-  const useConversational =
-    forceConversational || preferConversationalInDev || existingForMode.control_flags.experiment_variant === "treatment_b";
 
   const nextState =
     freeConversationEnabled
@@ -136,16 +124,14 @@ export async function POST(request: Request) {
         })
       : payload.data.action === "switch_quick_mode"
         ? switchLucyQuickMode(existingForMode)
-        : useConversational
-          ? await processLucyUserMessageConversational(existingForMode, payload.data.message ?? "", payload.data.clientMessageId)
-          : processLucyUserMessage(existingForMode, payload.data.message ?? "", payload.data.clientMessageId);
+        : processLucyUserMessage(existingForMode, payload.data.message ?? "", payload.data.clientMessageId);
 
   await saveLucySession(nextState);
   const latencyMs = Date.now() - startedAtMs;
 
   if (freeConversationEnabled) {
-    const previousView = buildSessionView(existingForMode);
-    const nextView = buildSessionView(nextState);
+    const previousView = buildLucySessionViewFree(existingForMode);
+    const nextView = buildLucySessionViewFree(nextState);
     const extractionPhase = nextState.control_flags.free_extraction_phase ?? "chat";
     const geminiStatus = nextState.control_flags.free_gemini_status ?? "none";
     const providerUsed = nextState.control_flags.provider_used_last_turn ?? "none";
@@ -364,5 +350,5 @@ export async function POST(request: Request) {
     });
   }
 
-  return NextResponse.json({ session: buildSessionView(nextState) }, { status: 200 });
+  return NextResponse.json({ session: buildLucySessionView(nextState) }, { status: 200 });
 }

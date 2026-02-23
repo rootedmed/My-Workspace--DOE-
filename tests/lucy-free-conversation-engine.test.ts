@@ -115,10 +115,73 @@ describe("Lucy free conversation engine", () => {
       clientMessageId: "free-1"
     });
 
-    expect(next.messages.at(-1)?.content).toBe("That sounds rough. What part felt most discouraging for you?");
+    const reply = next.messages.at(-1)?.content ?? "";
+    expect(reply).toContain("That sounds rough.");
+    expect(reply).toMatch(/\?$/);
+    expect(reply.toLowerCase()).not.toContain("how did that make you feel");
     expect(next.control_flags.free_gemini_status).toBe("ok");
     expect(next.control_flags.provider_used_last_turn).toBe("gemini");
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("rewrites banned exploratory questions to a forward-moving bridge question", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () =>
+      geminiTextResponse("That sucks. How did that make you feel when they canceled?")
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const seed = enableFreeConversationMode(createInitialLucySession("free-user-guard-banned"));
+    const next = await processLucyFreeConversationAction(seed, {
+      action: "send",
+      message: "I keep getting flaked on.",
+      clientMessageId: "free-guard-banned-1"
+    });
+
+    const reply = next.messages.at(-1)?.content ?? "";
+    expect(reply.toLowerCase()).not.toContain("how did that make you feel");
+    expect(reply).toMatch(/\?$/);
+    expect(
+      /When tension hits, are you more talk-it-through-now or space-first\?|When conflict starts, what do you do first: lean in quickly or step back a bit\?/i.test(
+        reply
+      )
+    ).toBe(true);
+    expect(next.control_flags.free_prompt_guard_reason).toBe("vague");
+  });
+
+  it("rewrites repeated question types to the next uncovered priority dimension", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () =>
+      geminiTextResponse("Got it. When conflict starts, what do you do first: lean in quickly or step back a bit?")
+    );
+    vi.stubGlobal("fetch", fetchMock);
+
+    const seed = enableFreeConversationMode(createInitialLucySession("free-user-guard-repeat"));
+    const seededHistory: LucySessionState = {
+      ...seed,
+      messages: [
+        ...seed.messages,
+        {
+          id: "assistant-conflict-prior",
+          role: "assistant",
+          content: "When tension hits, are you more talk-it-through-now or space-first?",
+          created_at: new Date().toISOString(),
+          stage_id: "opening",
+          kind: "normal"
+        }
+      ]
+    };
+
+    const next = await processLucyFreeConversationAction(seededHistory, {
+      action: "send",
+      message: "I open up slowly once I trust someone.",
+      clientMessageId: "free-guard-repeat-1"
+    });
+
+    const reply = next.messages.at(-1)?.content ?? "";
+    expect(/tension|conflict starts|space-first/i.test(reply)).toBe(false);
+    expect(reply).toMatch(/\?$/);
+    expect(next.control_flags.free_prompt_guard_reason).toBe("repeat");
   });
 
   it("retries once when Gemini fails transiently", async () => {
@@ -137,7 +200,7 @@ describe("Lucy free conversation engine", () => {
     });
 
     expect(fetchMock.mock.calls.length).toBeGreaterThanOrEqual(2);
-    expect(next.messages.at(-1)?.content).toContain("What would feel different");
+    expect(next.messages.at(-1)?.content).toMatch(/\?$/);
     expect(["ok", "retry_ok"]).toContain(next.control_flags.free_gemini_status);
     expect(next.control_flags.provider_used_last_turn).toBe("gemini");
   });
@@ -233,8 +296,8 @@ describe("Lucy free conversation engine", () => {
     });
 
     const reply = next.messages.at(-1)?.content ?? "";
-    expect(reply).toContain("Feeling mostly downs can really wear you down.");
-    expect(reply).toContain("What has felt most disappointing lately?");
+    expect(reply).toContain("Oh, that sounds really tough.");
+    expect(reply).toMatch(/\?$/);
     expect(next.control_flags.free_gemini_status).toBe("continued_ok");
     expect(next.control_flags.provider_used_last_turn).toBe("gemini");
     expect(fetchMock).toHaveBeenCalledTimes(2);

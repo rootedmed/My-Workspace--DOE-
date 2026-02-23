@@ -6,15 +6,35 @@ function parseBooleanEnv(raw: string | undefined): boolean | undefined {
   return undefined;
 }
 
-export function isLucyFreeConversationDevEnabled(): boolean {
+export type LucyOnboardingEngine = "free_chat" | "legacy";
+
+function parseEngineEnv(raw: string | undefined): LucyOnboardingEngine | undefined {
+  if (typeof raw !== "string") return undefined;
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "free_chat" || normalized === "legacy") {
+    return normalized;
+  }
+  return undefined;
+}
+
+export function resolveLucyOnboardingEngine(): LucyOnboardingEngine {
+  const explicitEngine = parseEngineEnv(process.env.LUCY_ONBOARDING_ENGINE);
+  if (explicitEngine) return explicitEngine;
+
   const forceLegacy = parseBooleanEnv(process.env.LUCY_FORCE_LEGACY_ONBOARDING);
-  if (forceLegacy === true) return false;
+  if (forceLegacy === true) return "legacy";
 
   const explicitFreeMode = parseBooleanEnv(process.env.LUCY_FREE_CONVO_ENABLED);
-  if (explicitFreeMode !== undefined) return explicitFreeMode;
+  if (explicitFreeMode !== undefined) {
+    return explicitFreeMode ? "free_chat" : "legacy";
+  }
 
   const devFlag = parseBooleanEnv(process.env.LUCY_FREE_CONVO_DEV_ENABLED);
-  if (devFlag === true) return true;
+  if (devFlag === true) return "free_chat";
 
-  return process.env.NODE_ENV === "production";
+  return "free_chat";
+}
+
+export function isLucyFreeConversationDevEnabled(): boolean {
+  return resolveLucyOnboardingEngine() === "free_chat";
 }

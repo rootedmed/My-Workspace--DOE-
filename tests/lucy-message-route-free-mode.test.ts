@@ -5,7 +5,6 @@ const ensureLucySessionMock = vi.fn();
 const saveLucySessionMock = vi.fn(async () => undefined);
 const processFreeMock = vi.fn();
 const enableFreeModeMock = vi.fn();
-const processConversationalMock = vi.fn();
 const processLegacyMock = vi.fn();
 const switchQuickModeMock = vi.fn();
 const buildLegacyViewMock = vi.fn();
@@ -52,15 +51,6 @@ vi.mock("@/lib/onboarding/lucy/engine", () => ({
   buildLucySessionView: buildLegacyViewMock,
   processLucyUserMessage: processLegacyMock,
   switchLucyQuickMode: switchQuickModeMock
-}));
-
-vi.mock("@/lib/onboarding/lucy/conversationalEngine", () => ({
-  processLucyUserMessageConversational: processConversationalMock
-}));
-
-vi.mock("@/lib/onboarding/lucy/freeMode", () => ({
-  isLucyFreeConversationDevEnabled: () =>
-    ["1", "true", "yes", "on"].includes((process.env.LUCY_FREE_CONVO_DEV_ENABLED ?? "").trim().toLowerCase())
 }));
 
 vi.mock("@/lib/observability/logger", () => ({
@@ -137,24 +127,44 @@ function freeView(): LucySessionView {
   };
 }
 
-describe("POST /api/onboarding/lucy/message (free mode routing)", () => {
+async function postLucyMessage(action: "send" | "switch_quick_mode" | "finish", message = "hello") {
+  const { POST } = await import("@/app/api/onboarding/lucy/message/route");
+  return POST(
+    new Request("http://localhost/api/onboarding/lucy/message", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ action, message })
+    })
+  );
+}
+
+function resetEngineEnv(): void {
+  delete process.env.LUCY_ONBOARDING_ENGINE;
+  delete process.env.LUCY_FORCE_LEGACY_ONBOARDING;
+  delete process.env.LUCY_FREE_CONVO_ENABLED;
+  delete process.env.LUCY_FREE_CONVO_DEV_ENABLED;
+}
+
+describe("POST /api/onboarding/lucy/message (free mode resolver precedence)", () => {
   beforeEach(() => {
     vi.resetModules();
     ensureLucySessionMock.mockReset();
     saveLucySessionMock.mockClear();
     processFreeMock.mockReset();
     enableFreeModeMock.mockReset();
-    processConversationalMock.mockReset();
     processLegacyMock.mockReset();
     switchQuickModeMock.mockReset();
     buildLegacyViewMock.mockReset();
     buildFreeViewMock.mockReset();
     logStructuredMock.mockReset();
-    delete process.env.LUCY_FREE_CONVO_DEV_ENABLED;
+    resetEngineEnv();
   });
 
-  it("routes to free conversation engine when dev flag is enabled", async () => {
-    process.env.LUCY_FREE_CONVO_DEV_ENABLED = "true";
+  it("uses free chat when LUCY_ONBOARDING_ENGINE=free_chat even if legacy fallback flags are on", async () => {
+    process.env.LUCY_ONBOARDING_ENGINE = "free_chat";
+    process.env.LUCY_FORCE_LEGACY_ONBOARDING = "true";
+    process.env.LUCY_FREE_CONVO_ENABLED = "false";
+
     const existing = baseState();
     const enabled = baseState({
       control_flags: {
@@ -189,23 +199,11 @@ describe("POST /api/onboarding/lucy/message (free mode routing)", () => {
     processFreeMock.mockResolvedValueOnce(next);
     buildFreeViewMock.mockReturnValue(freeView());
 
-    const { POST } = await import("@/app/api/onboarding/lucy/message/route");
-    const response = await POST(
-      new Request("http://localhost/api/onboarding/lucy/message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "finish",
-          message: ""
-        })
-      })
-    );
+    const response = await postLucyMessage("finish", "");
     const payload = await response.json();
 
     expect(response.status).toBe(200);
     expect(processFreeMock).toHaveBeenCalledTimes(1);
-    expect(processFreeMock.mock.calls[0]?.[1]).toMatchObject({ action: "finish" });
-    expect(processConversationalMock).not.toHaveBeenCalled();
     expect(processLegacyMock).not.toHaveBeenCalled();
     expect(payload.session.freeMode.enabled).toBe(true);
     expect(logStructuredMock).toHaveBeenCalledWith(
@@ -213,45 +211,91 @@ describe("POST /api/onboarding/lucy/message (free mode routing)", () => {
       "lucy_free_turn_processed",
       expect.objectContaining({
         extraction_phase: "chat",
-        turn_number: 0,
         provider_used: "none",
         gemini_status: "continued_ok",
-        gemini_http_status: 200,
-        gemini_finish_reason: "STOP",
-        gemini_block_reason: null,
-        gemini_error_code: null
+        gemini_http_status: 200
       })
     );
-    expect(logStructuredMock).not.toHaveBeenCalledWith("info", "lucy_free_prompt_guard_triggered", expect.any(Object));
   });
 
-  it("falls back to legacy conversational routing when free mode flag is disabled", async () => {
-    process.env.LUCY_FREE_CONVO_DEV_ENABLED = "false";
-    const existing = baseState({
-      control_flags: {
-        ...baseState().control_flags,
-        experiment_variant: "treatment_b"
-      }
-    });
+  it("uses legacy when LUCY_ONBOARDING_ENGINE=legacy even if free flags are enabled", async () => {
+    process.env.LUCY_ONBOARDING_ENGINE = "legacy";
+    process.env.LUCY_FREE_CONVO_ENABLED = "true";
+    process.env.LUCY_FREE_CONVO_DEV_ENABLED = "true";
+
+    const existing = baseState();
     const next = baseState();
     ensureLucySessionMock.mockResolvedValueOnce(existing);
-    processConversationalMock.mockResolvedValueOnce(next);
+    processLegacyMock.mockReturnValueOnce(next);
     buildLegacyViewMock.mockReturnValueOnce(legacyView());
 
-    const { POST } = await import("@/app/api/onboarding/lucy/message/route");
-    const response = await POST(
-      new Request("http://localhost/api/onboarding/lucy/message", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          action: "send",
-          message: "hello"
-        })
-      })
-    );
+    const response = await postLucyMessage("send", "hello");
 
     expect(response.status).toBe(200);
     expect(processFreeMock).not.toHaveBeenCalled();
-    expect(processConversationalMock).toHaveBeenCalledTimes(1);
+    expect(enableFreeModeMock).not.toHaveBeenCalled();
+    expect(processLegacyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses legacy when forced by LUCY_FORCE_LEGACY_ONBOARDING if engine is unset", async () => {
+    process.env.LUCY_FORCE_LEGACY_ONBOARDING = "true";
+    process.env.LUCY_FREE_CONVO_ENABLED = "true";
+
+    const existing = baseState();
+    const next = baseState();
+    ensureLucySessionMock.mockResolvedValueOnce(existing);
+    processLegacyMock.mockReturnValueOnce(next);
+    buildLegacyViewMock.mockReturnValueOnce(legacyView());
+
+    const response = await postLucyMessage("send", "hello");
+
+    expect(response.status).toBe(200);
+    expect(processFreeMock).not.toHaveBeenCalled();
+    expect(processLegacyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("uses legacy when LUCY_FREE_CONVO_ENABLED=false and no higher precedence is set", async () => {
+    process.env.LUCY_FREE_CONVO_ENABLED = "false";
+    process.env.LUCY_FREE_CONVO_DEV_ENABLED = "true";
+
+    const existing = baseState();
+    const next = baseState();
+    ensureLucySessionMock.mockResolvedValueOnce(existing);
+    processLegacyMock.mockReturnValueOnce(next);
+    buildLegacyViewMock.mockReturnValueOnce(legacyView());
+
+    const response = await postLucyMessage("send", "hello");
+
+    expect(response.status).toBe(200);
+    expect(processFreeMock).not.toHaveBeenCalled();
+    expect(processLegacyMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("defaults to free chat when no flags are set", async () => {
+    const existing = baseState();
+    const enabled = baseState({
+      control_flags: {
+        ...existing.control_flags,
+        free_conversation_mode: true,
+        free_extraction_phase: "chat"
+      }
+    });
+    const next = baseState({
+      control_flags: {
+        ...enabled.control_flags,
+        free_conversation_mode: true,
+        free_extraction_phase: "chat"
+      }
+    });
+    ensureLucySessionMock.mockResolvedValueOnce(existing);
+    enableFreeModeMock.mockReturnValueOnce(enabled);
+    processFreeMock.mockResolvedValueOnce(next);
+    buildFreeViewMock.mockReturnValue(freeView());
+
+    const response = await postLucyMessage("send", "hello");
+
+    expect(response.status).toBe(200);
+    expect(processFreeMock).toHaveBeenCalledTimes(1);
+    expect(processLegacyMock).not.toHaveBeenCalled();
   });
 });

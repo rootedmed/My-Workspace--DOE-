@@ -115,6 +115,7 @@ type FreeSteeringSnapshot = {
 };
 
 type PromptGuardReason = "vague" | "repeat" | "missing_question" | "none";
+type OutgoingQuestionType = LucyAnswerField | "exploratory";
 
 const REQUIRED_FIELDS: LucyAnswerField[] = [
   "past_attribution",
@@ -126,6 +127,44 @@ const REQUIRED_FIELDS: LucyAnswerField[] = [
   "relational_strengths",
   "growth_intention"
 ];
+
+const STEERING_PRIORITY_ORDER: LucyAnswerField[] = [
+  "conflict_speed",
+  "emotional_openness",
+  "relationship_vision",
+  "past_attribution",
+  "support_need",
+  "growth_intention",
+  "love_expression",
+  "relational_strengths"
+];
+
+const BANNED_EXPLORATORY_PATTERNS: RegExp[] = [
+  /\bhow\s+did\s+(?:that|this|it)\s+make\s+you\s+feel\b/i,
+  /\bcan\s+you\s+tell\s+me\s+more\b/i,
+  /\bcould\s+you\s+tell\s+me\s+more\b/i,
+  /\bwhy\s+do\s+you\s+think\b/i,
+  /\bdid\s+that\s+affect\s+your\s+(?:confidence|self[\s-]?esteem)\b/i,
+  /\bwhat\s+did\s+you\s+learn\s+from\s+that\b/i
+];
+
+const QUESTION_TYPE_PATTERNS: Record<LucyAnswerField, RegExp[]> = {
+  conflict_speed: [
+    /\bconflict\b/i,
+    /\btension\b/i,
+    /\bargument\b/i,
+    /\bfight\b/i,
+    /\btalk(?:\s+it)?\s+through\b/i,
+    /\bneed\s+space\b/i
+  ],
+  emotional_openness: [/\bvulnerab/i, /\bopen\s+up\b/i, /\btrust\b/i, /\bguarded\b/i, /\bprivate\b/i],
+  relationship_vision: [/\bhealthy relationship\b/i, /\bday[\s-]?to[\s-]?day\b/i, /\blook like\b/i, /\bfuture\b/i, /\bideal\b/i],
+  past_attribution: [/\bex\b/i, /\bpast\b/i, /\bended\b/i, /\bwent wrong\b/i, /\blast relationship\b/i],
+  support_need: [/\bstress/i, /\bsupport\b/i, /\bneed from a partner\b/i, /\bwhen you(?:'re| are) stressed\b/i],
+  growth_intention: [/\bdifferent next time\b/i, /\bwant to change\b/i, /\bthis time\b/i, /\bmoving forward\b/i],
+  love_expression: [/\bshow(?:\s+someone)?\s+you\s+care\b/i, /\bshow\s+love\b/i, /\blove language\b/i, /\bcare\b/i],
+  relational_strengths: [/\bbring to (?:a )?relationship\b/i, /\bstrength/i, /\bgood at\b/i, /\bproud\b/i]
+};
 
 const FIELD_LABELS: Record<LucyAnswerField, string> = {
   past_attribution: "why past relationships ended",
@@ -358,10 +397,11 @@ function estimateSteeringSnapshot(state: LucySessionState, latestUserMessage: st
   const latestSignalFields = estimateLatestSignalFields(latestUserMessage);
   const latestHadSignal = latestSignalFields.length > 0;
   const related = relatedFieldsForMessage(latestUserMessage);
-  const suggestedField =
-    related.find((field) => lowConfidenceFields.includes(field)) ??
-    lowConfidenceFields[0] ??
-    null;
+  const unresolvedByPriority = STEERING_PRIORITY_ORDER.filter((field) => confidenceByField[field] < 70);
+  const relatedByPriority = STEERING_PRIORITY_ORDER.filter(
+    (field) => confidenceByField[field] < 70 && related.includes(field)
+  );
+  const suggestedField = relatedByPriority[0] ?? unresolvedByPriority[0] ?? null;
   const scoreTotal = REQUIRED_FIELDS.reduce((sum, field) => sum + confidenceByField[field], 0);
   const coverageScore = Math.max(0, Math.min(100, Math.round(scoreTotal / REQUIRED_FIELDS.length)));
 
@@ -390,34 +430,61 @@ function applyPromptGuard(
   steering: FreeSteeringSnapshot
 ): { content: string; reason: PromptGuardReason } {
   const normalized = content.replace(/\s+/g, " ").trim();
-  if (!normalized) {
-    const fallbackField = steering.suggestedField ?? "past_attribution";
-    const question = pickBridgeQuestion(fallbackField, countUserTurns(state.messages));
-    return { content: `That makes sense. ${question}`, reason: "missing_question" };
-  }
-
-  const suggestedField = steering.suggestedField;
-  if (!suggestedField) return { content: normalized, reason: "none" };
-
+  const seed = countUserTurns(state.messages) + latestUserMessage.length;
+  const ack = shortAckSentence(normalized);
   const existingQuestions = splitQuestionLikeSegments(normalized);
-  const hasQuestion = existingQuestions.length > 0;
-  const repeatPool = recentAssistantQuestions(state.messages, 2).map((entry) => normalizeQuestionForComparison(entry));
-  const firstQuestionNormalized = hasQuestion ? normalizeQuestionForComparison(existingQuestions[0]!) : "";
-  const repeatedQuestion = firstQuestionNormalized.length > 0 && repeatPool.includes(firstQuestionNormalized);
-  const vagueQuestion = /tell me more|say more|how did that make you feel|anything else\?|go deeper/i.test(normalized);
+  const firstQuestion = existingQuestions[0]?.replace(/\s+/g, " ").trim() ?? "";
+  const recentQuestions = recentAssistantQuestions(state.messages, 3).map((entry) => normalizeQuestionStem(entry));
+  const recentTypes = recentAssistantQuestionTypes(state.messages, 4);
+  const lastType = recentTypes.at(-1);
 
-  if (!hasQuestion || repeatedQuestion || (vagueQuestion && steering.latestHadSignal)) {
-    const lead = normalized
-      .split(/(?<=[.!?])\s+/)
-      .find((segment) => !segment.includes("?")) ?? "That makes sense.";
-    const bridge = pickBridgeQuestion(suggestedField, countUserTurns(state.messages) + latestUserMessage.length);
-    const rebuilt = `${lead.trim()} ${bridge}`.replace(/\s+/g, " ").trim();
-    if (!hasQuestion) return { content: rebuilt, reason: "missing_question" };
-    if (repeatedQuestion) return { content: rebuilt, reason: "repeat" };
-    return { content: rebuilt, reason: "vague" };
+  let reason: PromptGuardReason = "none";
+  let question = firstQuestion;
+  let questionType: OutgoingQuestionType = question ? classifyQuestionType(question) : "exploratory";
+
+  if (!question) {
+    reason = "missing_question";
+  } else {
+    const repeatedQuestion = recentQuestions.includes(normalizeQuestionStem(question));
+    const repeatedType =
+      questionType !== "exploratory" &&
+      lastType === questionType &&
+      lastConsecutiveTypeRun(recentTypes, questionType) >= 1;
+    const exploratory = questionType === "exploratory" || isBannedExploratoryQuestion(question);
+
+    if (exploratory) {
+      reason = "vague";
+    } else if (repeatedQuestion || repeatedType) {
+      reason = "repeat";
+    }
   }
 
-  return { content: normalized, reason: "none" };
+  if (reason !== "none") {
+    const exclusions: OutgoingQuestionType[] = [];
+    if (questionType !== "exploratory") exclusions.push(questionType);
+    if (lastType && lastType !== "exploratory") exclusions.push(lastType);
+    const nextField = pickPriorityField(steering, exclusions);
+    question = pickBridgeQuestion(nextField, seed);
+    questionType = nextField;
+  }
+
+  const finalQuestion = question.endsWith("?") ? question : `${question.replace(/[.!]+$/, "")}?`;
+  const finalContent = `${ack} ${finalQuestion}`.replace(/\s+/g, " ").trim();
+  const forceReason = reason === "none" && !finalQuestion ? "missing_question" : reason;
+  if (!finalQuestion) {
+    const fallbackField = pickPriorityField(steering, lastType ? [lastType] : []);
+    return { content: `${ack} ${pickBridgeQuestion(fallbackField, seed)}`.replace(/\s+/g, " ").trim(), reason: "missing_question" };
+  }
+
+  if (reason === "none" && questionType === "exploratory") {
+    const fallbackField = pickPriorityField(steering, lastType ? [lastType] : []);
+    return {
+      content: `${ack} ${pickBridgeQuestion(fallbackField, seed)}`.replace(/\s+/g, " ").trim(),
+      reason: "vague"
+    };
+  }
+
+  return { content: finalContent, reason: forceReason };
 }
 
 function shouldShowWrapNudge(state: LucySessionState, steering: FreeSteeringSnapshot): boolean {
@@ -575,10 +642,39 @@ function transcript(messages: LucyMessage[], maxMessages: number): string {
     .join("\n");
 }
 
+function splitSentences(content: string): string[] {
+  const normalized = content.replace(/\s+/g, " ").trim();
+  if (!normalized) return [];
+  const sentences = normalized.match(/[^.!?]+[.!?]?/g) ?? [];
+  return sentences.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+}
+
 function splitQuestionLikeSegments(content: string): string[] {
-  const matches = content.match(/[^?]*\?/g);
-  if (!matches) return [];
-  return matches.map((entry) => entry.trim()).filter((entry) => entry.length > 0);
+  return splitSentences(content).filter((entry) => entry.includes("?"));
+}
+
+function normalizeQuestionStem(question: string): string {
+  return normalizeQuestionForComparison(question).replace(/\s+/g, " ").trim();
+}
+
+function isBannedExploratoryQuestion(question: string): boolean {
+  const normalized = normalizeQuestionStem(question);
+  if (!normalized) return false;
+  return BANNED_EXPLORATORY_PATTERNS.some((pattern) => pattern.test(normalized));
+}
+
+function classifyQuestionType(question: string): OutgoingQuestionType {
+  if (!question.trim()) return "exploratory";
+  if (isBannedExploratoryQuestion(question)) return "exploratory";
+
+  for (const field of STEERING_PRIORITY_ORDER) {
+    const patterns = QUESTION_TYPE_PATTERNS[field];
+    if (patterns?.some((pattern) => pattern.test(question))) {
+      return field;
+    }
+  }
+
+  return "exploratory";
 }
 
 function recentAssistantQuestions(messages: LucyMessage[], maxQuestions = 2): string[] {
@@ -596,6 +692,48 @@ function recentAssistantQuestions(messages: LucyMessage[], maxQuestions = 2): st
     }
   }
   return collected.reverse();
+}
+
+function recentAssistantQuestionTypes(messages: LucyMessage[], maxQuestions = 4): OutgoingQuestionType[] {
+  return recentAssistantQuestions(messages, maxQuestions).map((question) => classifyQuestionType(question));
+}
+
+function lastConsecutiveTypeRun(types: OutgoingQuestionType[], target: OutgoingQuestionType): number {
+  let run = 0;
+  for (let index = types.length - 1; index >= 0; index -= 1) {
+    if (types[index] !== target) break;
+    run += 1;
+  }
+  return run;
+}
+
+function shortAckSentence(content: string): string {
+  const first = splitSentences(content).find((entry) => !entry.includes("?"));
+  const fallback = "Got it.";
+  if (!first) return fallback;
+  const cleaned = first.replace(/[!?]+$/, ".").trim();
+  if (!cleaned) return fallback;
+  const words = cleaned.split(/\s+/).slice(0, 16).join(" ");
+  return /[.!?]$/.test(words) ? words : `${words}.`;
+}
+
+function pickPriorityField(
+  steering: FreeSteeringSnapshot,
+  exclusions: OutgoingQuestionType[] = []
+): LucyAnswerField {
+  const blocked = new Set(exclusions.filter((entry): entry is LucyAnswerField => entry !== "exploratory"));
+  for (const field of STEERING_PRIORITY_ORDER) {
+    if (steering.confidenceByField[field] < 70 && !blocked.has(field)) {
+      return field;
+    }
+  }
+  if (steering.suggestedField && !blocked.has(steering.suggestedField)) {
+    return steering.suggestedField;
+  }
+  for (const field of STEERING_PRIORITY_ORDER) {
+    if (!blocked.has(field)) return field;
+  }
+  return STEERING_PRIORITY_ORDER[0]!;
 }
 
 function extractJsonText(raw: string): string {
@@ -1051,9 +1189,12 @@ function buildFreeChatPrompt(
 ): string {
   const userTurnCount = countUserTurns(state.messages);
   const recentQuestions = recentAssistantQuestions(state.messages, 2);
+  const recentTypes = recentAssistantQuestionTypes(state.messages, 3);
+  const lastType = recentTypes.at(-1) ?? "none";
   const renderedCoverage = REQUIRED_FIELDS
     .map((field) => `${field}:${steering.levelByField[field]}(${steering.confidenceByField[field]})`)
     .join(" | ");
+  const unresolvedPriority = STEERING_PRIORITY_ORDER.filter((field) => steering.confidenceByField[field] < 70);
 
   return [
     "Conversation history (most recent last):",
@@ -1064,17 +1205,20 @@ function buildFreeChatPrompt(
     "Runtime steering context:",
     `- user_turn_count: ${userTurnCount}`,
     `- last_assistant_questions: ${recentQuestions.join(" | ") || "none"}`,
+    `- last_assistant_question_type: ${lastType}`,
     `- latest_turn_signal_hit: ${steering.latestHadSignal ? "yes" : "no"}`,
     `- latest_turn_signal_fields: ${steering.latestSignalFields.join(", ") || "none"}`,
     `- estimated_coverage_score: ${steering.coverageScore}`,
     `- estimated_covered_fields: ${steering.estimatedCoveredFields.join(", ") || "none"}`,
     `- low_confidence_fields: ${steering.lowConfidenceFields.join(", ") || "none"}`,
+    `- unresolved_by_priority: ${unresolvedPriority.join(", ") || "none"}`,
     `- preferred_next_dimension: ${steering.suggestedField ?? "none"}`,
     `- confidence_by_dimension: ${renderedCoverage}`,
     "",
-    "Steering goals (internal): past attribution; conflict+support; openness; vision+growth; love expression+strengths.",
+    "Hard pacing rules: one short acknowledgment sentence max, then one forward-moving question.",
+    "Never ask banned exploratory prompts and never repeat the same question type as last turn.",
     "If latest_turn_signal_hit=no, ask one clarifier only, then pivot to preferred_next_dimension.",
-    "If latest_turn_signal_hit=yes, validate briefly, extract, and bridge to preferred_next_dimension.",
+    "If latest_turn_signal_hit=yes, extract and bridge immediately to preferred_next_dimension.",
     "Reply as Lucy now. Follow system rules exactly."
   ].join("\n");
 }

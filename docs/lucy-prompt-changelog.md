@@ -68,3 +68,18 @@ All production prompt updates must be logged before rollout.
    - safety flag rate: neutral
 7. **Observed Results (post deploy)**: pending.
 8. **Decision**: pending.
+
+### `lucy-prompt-20260223-02`
+
+1. **Date**: `2026-02-23`
+2. **Owner**: `team`
+3. **Hypothesis**: Replacing free-chat prompt with hard anti-drill rules plus deterministic guard rewrites will stop therapist-style loops and improve completion speed without raising frustration.
+4. **Diff Summary**: Replaced free-chat system prompt with emergency forward-motion contract (non-therapeutic, no obvious/banned exploratory prompts, 12-16 exchange pacing, strict dimension priority). Added deterministic outgoing-question sanitizer for banned exploratory patterns, repeated-type prevention, and missing-question auto-bridge rewrite.
+5. **Affected Scenarios**: `ex_venting_high_frustration`, `oversharer_detailed`, `idk_repeated`, `tangent_heavy`, `balanced_thoughtful`.
+6. **Expected Metric Movement**:
+   - completion: up
+   - felt_understood: neutral to up
+   - extraction accuracy: up
+   - safety flag rate: neutral
+7. **Observed Results (post deploy)**: pending.
+8. **Decision**: pending.
