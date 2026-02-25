@@ -3,7 +3,8 @@ export type PastAttribution =
   | "conflict_comm"
   | "emotional_disconnect"
   | "autonomy"
-  | "external";
+  | "external"
+  | "no_history";
 
 export type ConflictSpeed = 1 | 2 | 3 | 4 | 5;
 

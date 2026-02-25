@@ -20,7 +20,8 @@ const payloadSchema = z.object({
     "conflict_comm",
     "emotional_disconnect",
     "autonomy",
-    "external"
+    "external",
+    "no_history"
   ]),
   conflict_speed: z.union([z.literal(1), z.literal(2), z.literal(3), z.literal(4), z.literal(5)]),
   love_expression: z.array(z.enum(["acts", "time", "words", "physical", "gifts"])).min(1).max(2),

@@ -67,6 +67,19 @@ export function extractPastAttribution(rawInput: string): LucyExtractionResult<L
 
   if (
     includesAny(text, [
+      "never had one",
+      "never had a relationship",
+      "never been in a relationship",
+      "no relationship experience",
+      "i've never dated",
+      "i have never dated"
+    ])
+  ) {
+    return { matched: true, value: "no_history", confidence: 96, ambiguous: false };
+  }
+
+  if (
+    includesAny(text, [
       "mixed intentions",
       "no commitment",
       "not serious",

@@ -14,7 +14,7 @@ import type {
 } from "@/lib/onboarding/lucy/types";
 
 const FIELD_VALUES = {
-  past_attribution: ["misaligned_goals", "conflict_comm", "emotional_disconnect", "autonomy", "external"] as const,
+  past_attribution: ["misaligned_goals", "conflict_comm", "emotional_disconnect", "autonomy", "external", "no_history"] as const,
   conflict_speed: [1, 2, 3, 4, 5] as const,
   support_need: ["validation", "practical", "presence", "space", "distraction"] as const,
   emotional_openness: [1, 2, 3, 4, 5] as const,

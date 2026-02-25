@@ -69,7 +69,7 @@ export const MAX_EXCHANGES_PER_STAGE: Partial<Record<LucyStageId, number>> = {
 };
 
 export const OPENING_MESSAGES = [
-  "I’m Lucy, your dating coach. How are you feeling about dating right now?",
+  "I'm Lucy, your dating coach. How are you feeling about dating right now?",
   "I’m Lucy, your dating coach. What’s been the hardest part lately?",
   "I’m Lucy, your dating coach. Want to start with what happened last time, or what you want now?"
 ];
@@ -142,7 +142,8 @@ export const QUICK_OPTIONS: Record<LucyAnswerField, LucyOption[]> = {
     { value: "conflict_comm", label: "Communication issues", hint: "Could not repair conflict well" },
     { value: "emotional_disconnect", label: "Emotional distance", hint: "Felt unseen or disconnected" },
     { value: "autonomy", label: "Need for space", hint: "Needed more independence" },
-    { value: "external", label: "External timing", hint: "Life circumstances got in the way" }
+    { value: "external", label: "External timing", hint: "Life circumstances got in the way" },
+    { value: "no_history", label: "No relationship history yet", hint: "Haven't had a relationship yet" }
   ],
   conflict_speed: [
     { value: "1", label: "1 · Talk now", hint: "Resolve immediately" },

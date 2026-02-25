@@ -81,4 +81,28 @@ describe("POST /api/onboarding/complete", () => {
     expect(payload.profile.growth_intention).toBe("alignment");
     expect(payload.progress.completed).toBe(true);
   });
+
+  it("accepts no_history as a valid past_attribution value", async () => {
+    const request = new Request("http://localhost/api/onboarding/complete", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        past_attribution: "no_history",
+        conflict_speed: 3,
+        love_expression: ["time", "words"],
+        support_need: "validation",
+        emotional_openness: 2,
+        relationship_vision: "friendship",
+        relational_strengths: ["consistency", "honesty"],
+        growth_intention: "alignment"
+      })
+    });
+
+    const response = await POST(request);
+    const payload = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(payload.profile.past_attribution).toBe("no_history");
+    expect(payload.progress.completed).toBe(true);
+  });
 });

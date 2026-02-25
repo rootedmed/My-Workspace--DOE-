@@ -98,3 +98,18 @@ All production prompt updates must be logged before rollout.
    - safety flag rate: neutral
 7. **Observed Results (post deploy)**: pending.
 8. **Decision**: pending.
+
+### `lucy-prompt-20260225-02`
+
+1. **Date**: `2026-02-25`
+2. **Owner**: `team`
+3. **Hypothesis**: Prompt-first simplification with minimal deterministic guards will restore natural conversation flow and stop no-history past-loop regressions.
+4. **Diff Summary**: Replaced free-chat system prompt with the simplified Lucy prompt from product direction; removed runtime steering metadata injection from chat prompts; reduced guard scope to banned exploratory rewrites + loop breaking + missing-question fallback; added explicit `past_attribution=no_history` extraction and blocked past-breakup follow-up loops when no history is known.
+5. **Affected Scenarios**: `vague_openers`, `never_had_relationship`, `idk_repeated`, `ex_venting_high_frustration`.
+6. **Expected Metric Movement**:
+   - completion: neutral to up
+   - felt_understood: up
+   - extraction accuracy: neutral to up
+   - safety flag rate: neutral
+7. **Observed Results (post deploy)**: pending.
+8. **Decision**: pending.

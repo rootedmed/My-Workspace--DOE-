@@ -55,12 +55,9 @@ function seedTopicState(): LucySessionState {
   const seed = enableFreeConversationMode(createInitialLucySession("low-signal-topic"));
   return {
     ...seed,
-    control_flags: {
-      ...seed.control_flags,
-      free_topic_id: "past_attribution",
-      free_topic_turn_count: 2,
-      free_last_dialogue_act: "direct_bridge",
-      free_dialogue_phase: "middle"
+    extracted_data: {
+      ...seed.extracted_data,
+      past_attribution: "no_history"
     }
   };
 }
@@ -70,14 +67,10 @@ describe("Lucy free chat low-signal matrix", () => {
     vi.unstubAllGlobals();
     delete process.env.GEMINI_API_KEY;
     delete process.env.GROQ_API_KEY;
-    delete process.env.LUCY_FREE_POLICY_MODE;
-    delete process.env.LUCY_FREE_POLICY_ADAPTIVE_PERCENT;
   });
 
-  it("handles vague openers without abrupt deep conflict pivots", async () => {
+  it("handles vague openers with concise acknowledgments and no banned exploratory probes", async () => {
     process.env.GEMINI_API_KEY = "test-key";
-    process.env.LUCY_FREE_POLICY_MODE = "adaptive";
-    process.env.LUCY_FREE_POLICY_ADAPTIVE_PERCENT = "100";
 
     const fetchMock = vi.fn(async () =>
       geminiTextResponse("Got it. When conflict starts, what do you do first: lean in quickly or step back a bit?")
@@ -96,15 +89,14 @@ describe("Lucy free chat low-signal matrix", () => {
       const reply = state.messages.at(-1)?.content ?? "";
       expect(BANNED_EXPLORATORY_PATTERN.test(reply)).toBe(false);
       expect(hasWarmAck(reply)).toBe(true);
-      expect(isConflictPivot(reply)).toBe(false);
       expect(reply.includes("?")).toBe(true);
+      const questionCount = (reply.match(/\?/g) ?? []).length;
+      expect(questionCount).toBeLessThanOrEqual(1);
     }
   });
 
-  it("enforces reflect-only budget and avoids consecutive no-question turns", async () => {
+  it("keeps low-signal turns question-forward and avoids exploratory probing loops", async () => {
     process.env.GEMINI_API_KEY = "test-key";
-    process.env.LUCY_FREE_POLICY_MODE = "adaptive";
-    process.env.LUCY_FREE_POLICY_ADAPTIVE_PERCENT = "100";
 
     const fetchMock = vi.fn(async () =>
       geminiTextResponse("I hear you. When conflict starts, what do you do first: lean in quickly or step back a bit?")
@@ -119,7 +111,8 @@ describe("Lucy free chat low-signal matrix", () => {
       clientMessageId: "reflect-1"
     });
     const reply1 = state.messages.at(-1)?.content ?? "";
-    expect(reply1.includes("?")).toBe(false);
+    expect(reply1.includes("?")).toBe(true);
+    expect(BANNED_EXPLORATORY_PATTERN.test(reply1)).toBe(false);
 
     state = await processLucyFreeConversationAction(state, {
       action: "send",
@@ -135,7 +128,8 @@ describe("Lucy free chat low-signal matrix", () => {
       clientMessageId: "reflect-3"
     });
     const reply3 = state.messages.at(-1)?.content ?? "";
-    expect(reply3.length).toBeGreaterThan(0);
+    expect(reply3.includes("?")).toBe(true);
+    expect(BANNED_EXPLORATORY_PATTERN.test(reply3)).toBe(false);
 
     state = await processLucyFreeConversationAction(state, {
       action: "send",
@@ -143,13 +137,13 @@ describe("Lucy free chat low-signal matrix", () => {
       clientMessageId: "reflect-4"
     });
     const reply4 = state.messages.at(-1)?.content ?? "";
-    expect(!(reply3.includes("?") === false && reply4.includes("?") === false)).toBe(true);
-    expect(state.control_flags.free_reflect_only_count).toBeLessThanOrEqual(2);
+    expect(reply4.includes("?")).toBe(true);
+    expect(BANNED_EXPLORATORY_PATTERN.test(reply4)).toBe(false);
+    expect(reply4.length).toBeGreaterThan(0);
   });
 
-  it("forces a pivot when topic budget is exhausted", async () => {
+  it("rewrites past-breakup prompts once no_history is known", async () => {
     process.env.GEMINI_API_KEY = "test-key";
-    process.env.LUCY_FREE_POLICY_MODE = "adaptive";
 
     const fetchMock = vi.fn(async () =>
       geminiTextResponse("Quick rewind: what felt like the core pattern that ended your last relationship?")
@@ -165,7 +159,7 @@ describe("Lucy free chat low-signal matrix", () => {
 
     const reply = state.messages.at(-1)?.content ?? "";
     expect(/core pattern|last relationship|quick rewind/i.test(reply)).toBe(false);
-    expect(state.control_flags.free_policy_forced_pivot_last_turn).toBe(true);
+    expect(state.control_flags.free_prompt_guard_reason).toBe("repeat");
   });
 
   it("keeps style normalized across provider failover", async () => {

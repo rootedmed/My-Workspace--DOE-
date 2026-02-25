@@ -50,29 +50,40 @@ Primary free runtime event remains:
 
 `lucy_free_turn_processed`
 
-Payload now includes adaptive policy and guard quality fields:
+Payload includes provider/extraction health plus minimal guard quality fields:
 
-1. `policy_mode`
-2. `dialogue_phase`
-3. `dialogue_act`
-4. `question_required`
-5. `low_signal`
-6. `high_emotion`
-7. `forced_pivot`
-8. `topic_id`
-9. `topic_turn_count`
-10. `guard_reason`
-11. `robotic_pattern_hit`
-12. `pre_guard_repeat_type_hit`
+1. `extraction_phase`
+2. `provider_used`
+3. `gemini_status`
+4. `gemini_http_status`
+5. `gemini_finish_reason`
+6. `gemini_block_reason`
+7. `gemini_error_code`
+8. `guard_reason`
+9. `robotic_pattern_hit`
+10. `pre_guard_repeat_type_hit`
 
-## Policy Controls
+## Prompt-First Runtime
 
-Free chat policy mode is controlled by:
+Free-chat prompt context is intentionally minimal:
 
-1. `LUCY_FREE_POLICY_MODE=strict|adaptive` (default `adaptive`)
-2. `LUCY_FREE_POLICY_ADAPTIVE_PERCENT=0..100` (default `100`)
+1. transcript window
+2. latest user message
+3. one short runtime instruction
 
-Adaptive mode uses stable user hashing for rollout.
+No runtime confidence matrix, dialogue-act policy block, or phase metadata is injected into the Gemini prompt.
+
+## `no_history` Semantics
+
+`past_attribution` supports additive value:
+
+`no_history`
+
+Behavior:
+
+1. Extract when users say they have never had a relationship.
+2. Treat as neutral in compatibility heuristics (no bonus/penalty).
+3. Block repeat past-breakup questioning once this value is known; pivot to another uncovered dimension.
 
 ## Phase 2 Cleanup Plan
 

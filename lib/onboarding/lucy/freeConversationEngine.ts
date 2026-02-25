@@ -243,12 +243,26 @@ const FIELD_LABELS: Record<LucyAnswerField, string> = {
   growth_intention: "what you want to change this time"
 };
 
-const PAST_ATTRIBUTION_VALUES = new Set(["misaligned_goals", "conflict_comm", "emotional_disconnect", "autonomy", "external"]);
+const PAST_ATTRIBUTION_VALUES = new Set([
+  "misaligned_goals",
+  "conflict_comm",
+  "emotional_disconnect",
+  "autonomy",
+  "external",
+  "no_history"
+]);
 const SUPPORT_NEED_VALUES = new Set(["validation", "practical", "presence", "space", "distraction"]);
 const RELATIONSHIP_VISION_VALUES = new Set(["independent", "enmeshed", "friendship", "safe", "adventure"]);
 const GROWTH_INTENTION_VALUES = new Set(["depth", "balance", "chosen", "peace", "alignment"]);
 const LOVE_EXPRESSION_VALUES = new Set(["acts", "time", "words", "physical", "gifts"]);
 const RELATIONAL_STRENGTH_VALUES = new Set(["consistency", "loyalty", "honesty", "joy", "support"]);
+const NO_HISTORY_PATTERNS: RegExp[] = [
+  /\bnever had one\b/i,
+  /\bnever had a relationship\b/i,
+  /\bnever been in a relationship\b/i,
+  /\bno relationship experience\b/i,
+  /\bhaven'?t had a relationship\b/i
+];
 
 const FIELD_TO_STAGE = {
   past_attribution: "past_attribution",
@@ -392,6 +406,12 @@ function normalizePolicyMode(value: unknown): FreePolicyMode | undefined {
   return value === "strict" || value === "adaptive" ? value : undefined;
 }
 
+function detectNoHistoryMessage(rawInput: string): boolean {
+  const text = rawInput.trim();
+  if (!text) return false;
+  return NO_HISTORY_PATTERNS.some((pattern) => pattern.test(text));
+}
+
 function parsePolicyModeEnv(raw: string | undefined): FreePolicyMode {
   if (typeof raw !== "string") return "adaptive";
   const normalized = raw.trim().toLowerCase();
@@ -427,6 +447,32 @@ function resolvePolicyModeForState(state: LucySessionState): FreePolicyMode {
 
 function missingFields(state: LucySessionState): LucyAnswerField[] {
   return REQUIRED_FIELDS.filter((field) => !hasValue(state, field));
+}
+
+function fallbackFieldForMinimalGuard(
+  state: LucySessionState,
+  steering: FreeSteeringSnapshot,
+  exclusions: OutgoingQuestionType[] = []
+): LucyAnswerField {
+  const blocked = new Set(exclusions.filter((entry): entry is LucyAnswerField => entry !== "exploratory"));
+  const hasNoHistory = state.extracted_data.past_attribution === "no_history";
+  const userTurns = countUserTurns(state.messages);
+  const isOpening = userTurns <= 3 || steering.coverageScore < 40;
+  const priority = isOpening ? OPENING_ANCHOR_ORDER : STEERING_PRIORITY_ORDER;
+
+  if (hasNoHistory) {
+    blocked.add("past_attribution");
+  }
+  for (const field of priority) {
+    if (steering.confidenceByField[field] < 70 && !blocked.has(field)) {
+      return field;
+    }
+  }
+  for (const field of priority) {
+    if (!blocked.has(field)) return field;
+  }
+  if (hasNoHistory) return "relationship_vision";
+  return isOpening ? "support_need" : "conflict_speed";
 }
 
 function wordCount(text: string): number {
@@ -764,23 +810,11 @@ function applyPromptGuard(
   state: LucySessionState,
   content: string,
   latestUserMessage: string,
-  steering: FreeSteeringSnapshot,
-  policy: FreeDialoguePolicy
+  steering: FreeSteeringSnapshot
 ): PromptGuardMeta {
   const styleBefore = normalizeLucyStyle(content);
   const normalized = styleBefore.text;
   const seed = countUserTurns(state.messages) + latestUserMessage.length;
-  if (!policy.requireQuestion) {
-    const reflectReply = buildReflectOnlyReply(normalized, policy);
-    return {
-      content: reflectReply,
-      reason: styleBefore.roboticPatternHit ? "style" : "none",
-      questionType: "exploratory",
-      preGuardRepeatTypeHit: false,
-      roboticPatternHit: styleBefore.roboticPatternHit
-    };
-  }
-
   const ack = shortAckSentence(removeQuestions(normalized) || normalized);
   const existingQuestions = splitQuestionLikeSegments(normalized);
   const firstQuestion = existingQuestions[0]?.replace(/\s+/g, " ").trim() ?? "";
@@ -795,6 +829,7 @@ function applyPromptGuard(
     questionType !== "exploratory" &&
     lastType === questionType &&
     lastConsecutiveTypeRun(recentTypes, questionType) >= 1;
+  const noHistoryKnown = state.extracted_data.past_attribution === "no_history";
 
   if (!question) {
     reason = "missing_question";
@@ -807,36 +842,19 @@ function applyPromptGuard(
       reason = "vague";
     } else if (repeatedQuestion || repeatedType) {
       reason = "repeat";
+    } else if (noHistoryKnown && questionType === "past_attribution") {
+      reason = "repeat";
     }
   }
 
   const exclusions: OutgoingQuestionType[] = [];
   if (questionType !== "exploratory") exclusions.push(questionType);
   if (lastType && lastType !== "exploratory") exclusions.push(lastType);
-
-  const anchorRepeatBlocked =
-    lastType === policy.anchorField &&
-    lastConsecutiveTypeRun(recentTypes, policy.anchorField) >= 1;
-  let replacementField = policy.anchorField;
-  if (anchorRepeatBlocked) {
-    replacementField = pickPriorityField(steering, [...exclusions, replacementField]);
-  }
+  const replacementField = fallbackFieldForMinimalGuard(state, steering, exclusions);
 
   if (reason !== "none") {
     question = pickBridgeQuestion(replacementField, seed);
     questionType = replacementField;
-  } else if (policy.forcedPivot && questionType !== replacementField) {
-    question = pickBridgeQuestion(replacementField, seed);
-    questionType = replacementField;
-    reason = "style";
-  } else if (policy.lowSignal && policy.phase === "opening" && questionType !== policy.anchorField) {
-    question = pickBridgeQuestion(replacementField, seed);
-    questionType = replacementField;
-    reason = "style";
-  } else if (questionType !== "exploratory" && steering.confidenceByField[questionType] >= 70) {
-    question = pickBridgeQuestion(replacementField, seed);
-    questionType = replacementField;
-    reason = "style";
   }
 
   if (questionType === "exploratory") {
@@ -848,7 +866,11 @@ function applyPromptGuard(
   const finalQuestion = question.endsWith("?") ? question : `${question.replace(/[.!]+$/, "")}?`;
   const finalContent = `${ack} ${finalQuestion}`.replace(/\s+/g, " ").trim();
   if (!finalQuestion) {
-    const fallbackField = pickPriorityField(steering, lastType ? [lastType] : [policy.anchorField]);
+    const fallbackField = fallbackFieldForMinimalGuard(
+      state,
+      steering,
+      lastType ? [lastType] : []
+    );
     return {
       content: `${ack} ${pickBridgeQuestion(fallbackField, seed)}`.replace(/\s+/g, " ").trim(),
       reason: "missing_question",
@@ -1565,67 +1587,15 @@ function mergeContinuationReply(firstText: string, continuationText: string): st
 
 function buildFreeChatPrompt(
   state: LucySessionState,
-  latestUserMessage: string,
-  steering: FreeSteeringSnapshot,
-  policy: FreeDialoguePolicy
+  latestUserMessage: string
 ): string {
-  const userTurnCount = countUserTurns(state.messages);
-  const recentQuestions = recentAssistantQuestions(state.messages, 2);
-  const recentTypes = recentAssistantQuestionTypes(state.messages, 3);
-  const lastType = recentTypes.at(-1) ?? "none";
-  const renderedCoverage = REQUIRED_FIELDS
-    .map((field) => `${field}:${steering.levelByField[field]}(${steering.confidenceByField[field]})`)
-    .join(" | ");
-  const unresolvedPriority = STEERING_PRIORITY_ORDER.filter((field) => steering.confidenceByField[field] < 70);
-  const openingContextUsers = state.messages
-    .filter((entry) => entry.role === "user")
-    .slice(0, 2)
-    .map((entry) => entry.content)
-    .join(" | ");
-  const openingContextAssistant =
-    state.messages.find((entry) => entry.role === "assistant")?.content ?? "none";
-
   return [
     "Conversation history (most recent last):",
     transcript(state.messages, TRANSCRIPT_PROMPT_WINDOW) || "(no history)",
     "",
     `Latest user message: ${latestUserMessage}`,
-    `Opening context users: ${openingContextUsers || "none"}`,
-    `Opening context first assistant: ${openingContextAssistant}`,
     "",
-    "Runtime steering context:",
-    `- user_turn_count: ${userTurnCount}`,
-    `- last_assistant_questions: ${recentQuestions.join(" | ") || "none"}`,
-    `- last_assistant_question_type: ${lastType}`,
-    `- latest_turn_signal_hit: ${steering.latestHadSignal ? "yes" : "no"}`,
-    `- latest_turn_signal_fields: ${steering.latestSignalFields.join(", ") || "none"}`,
-    `- estimated_coverage_score: ${steering.coverageScore}`,
-    `- estimated_covered_fields: ${steering.estimatedCoveredFields.join(", ") || "none"}`,
-    `- low_confidence_fields: ${steering.lowConfidenceFields.join(", ") || "none"}`,
-    `- unresolved_by_priority: ${unresolvedPriority.join(", ") || "none"}`,
-    `- preferred_next_dimension: ${steering.suggestedField ?? "none"}`,
-    `- confidence_by_dimension: ${renderedCoverage}`,
-    `- dialogue_phase: ${policy.phase}`,
-    `- dialogue_act: ${policy.act}`,
-    `- question_required: ${policy.requireQuestion ? "yes" : "no"}`,
-    `- low_signal: ${policy.lowSignal ? "yes" : "no"}`,
-    `- high_emotion: ${policy.highEmotion ? "yes" : "no"}`,
-    `- topic_id: ${policy.topicId}`,
-    `- topic_turn_count: ${policy.topicTurnCount}`,
-    `- topic_budget_remaining: ${policy.topicBudgetRemaining}`,
-    `- forced_pivot: ${policy.forcedPivot ? "yes" : "no"}`,
-    `- anchor_dimension: ${policy.anchorField}`,
-    `- policy_mode: ${policy.mode}`,
-    "",
-    "Adaptive pacing rules:",
-    "- Use one short, human acknowledgment first.",
-    "- If question_required=yes, ask one forward-moving question only.",
-    "- If question_required=no, send a reflective response with no question mark.",
-    "- Never ask banned exploratory prompts.",
-    "- Do not repeat the same question type on back-to-back turns.",
-    "- If low_signal=yes and opening phase, bridge gently from their words before deeper pivots.",
-    "- Limited reflective turns are allowed, but the next turn must progress.",
-    "Reply as Lucy now. Follow system rules exactly."
+    "Reply as Lucy now. Keep it natural, concise, and connected to what they just said."
   ].join("\n");
 }
 
@@ -1694,11 +1664,9 @@ function fallbackNoticeForFailure(status: GeminiCallStatus, result: GeminiCallRe
 
 async function generateLucyReply(
   state: LucySessionState,
-  latestUserMessage: string,
-  steering: FreeSteeringSnapshot,
-  policy: FreeDialoguePolicy
+  latestUserMessage: string
 ): Promise<GeneratedLucyReply> {
-  const prompt = buildFreeChatPrompt(state, latestUserMessage, steering, policy);
+  const prompt = buildFreeChatPrompt(state, latestUserMessage);
   const first = await callGemini(LUCY_FREE_CHAT_SYSTEM_PROMPT, prompt, {
     json: false,
     maxTokens: 640,
@@ -2116,20 +2084,30 @@ async function handleUserMessage(state: LucySessionState, message: string, clien
     return runExtractionAndAdvance(cleared);
   }
 
-  const steering = estimateSteeringSnapshot(next, text);
-  const policy = selectDialoguePolicy(next, text, steering);
-  const nextLowSignalStreak = policy.lowSignal ? (next.control_flags.free_low_signal_streak ?? 0) + 1 : 0;
-  const chatState = withFreeFlags(next, {
+  const noHistoryExtraction = extractForStage("past_attribution", text);
+  const withNoHistory =
+    noHistoryExtraction.matched && noHistoryExtraction.value === "no_history"
+      ? applyExtractionValues(
+          next,
+          {
+            past_attribution: {
+              value: "no_history",
+              confidence: Math.max(85, noHistoryExtraction.confidence)
+            }
+          },
+          "inferred"
+        )
+      : next;
+
+  const steering = estimateSteeringSnapshot(withNoHistory, text);
+  const nextLowSignalStreak = steering.latestHadSignal ? 0 : (withNoHistory.control_flags.free_low_signal_streak ?? 0) + 1;
+  const chatState = withFreeFlags(withNoHistory, {
     free_extraction_phase: "chat",
     free_coverage_score: steering.coverageScore,
     free_coverage_fields_estimated: steering.estimatedCoveredFields,
-    free_low_signal_streak: nextLowSignalStreak,
-    free_policy_mode: policy.mode,
-    free_dialogue_phase: policy.phase,
-    free_topic_id: policy.topicId,
-    free_topic_turn_count: policy.topicTurnCount
+    free_low_signal_streak: nextLowSignalStreak
   });
-  const generated = await generateLucyReply(chatState, text, steering, policy);
+  const generated = await generateLucyReply(chatState, text);
   const providerUsed = generated.providerUsed;
   const providerNoneStyle = normalizeLucyStyle(generated.content);
   const guardedReply =
@@ -2141,17 +2119,11 @@ async function handleUserMessage(state: LucySessionState, message: string, clien
           preGuardRepeatTypeHit: false,
           roboticPatternHit: providerNoneStyle.roboticPatternHit
         }
-      : applyPromptGuard(chatState, generated.content, text, steering, policy);
+      : applyPromptGuard(chatState, generated.content, text, steering);
   const wrapNudge = shouldShowWrapNudge(chatState, steering);
   const finalContent = wrapNudge
     ? `${guardedReply.content} If this feels accurate, you can tap “I’m done” any time.`
     : guardedReply.content;
-  const reflectOnlyCount =
-    (chatState.control_flags.free_reflect_only_count ?? 0) + (policy.act === "reflect_only" ? 1 : 0);
-  const reflectCooldown =
-    policy.act === "reflect_only"
-      ? countUserTurns(chatState.messages) + 1
-      : Math.max(0, chatState.control_flags.free_reflect_only_cooldown_until_turn ?? 0);
   const withReplyFlags = withFreeFlags(chatState, {
     free_gemini_status: generated.geminiStatus,
     free_gemini_http_status: generated.geminiHttpStatus ?? undefined,
@@ -2164,17 +2136,17 @@ async function handleUserMessage(state: LucySessionState, message: string, clien
       (chatState.control_flags.free_prompt_guard_hits ?? 0) + (guardedReply.reason === "none" ? 0 : 1),
     free_prompt_guard_reason: guardedReply.reason,
     free_wrap_nudge_shown: wrapNudge ? true : Boolean(chatState.control_flags.free_wrap_nudge_shown),
-    free_dialogue_phase: policy.phase,
-    free_last_dialogue_act: policy.act,
-    free_reflect_only_count: reflectOnlyCount,
-    free_reflect_only_cooldown_until_turn: reflectCooldown,
-    free_topic_id: policy.topicId,
-    free_topic_turn_count: policy.topicTurnCount,
-    free_policy_mode: policy.mode,
-    free_policy_forced_pivot_last_turn: policy.forcedPivot,
-    free_question_required_last_turn: policy.requireQuestion,
-    free_low_signal_last_turn: policy.lowSignal,
-    free_high_emotion_last_turn: policy.highEmotion,
+    free_dialogue_phase: undefined,
+    free_last_dialogue_act: undefined,
+    free_reflect_only_count: undefined,
+    free_reflect_only_cooldown_until_turn: undefined,
+    free_topic_id: undefined,
+    free_topic_turn_count: undefined,
+    free_policy_mode: undefined,
+    free_policy_forced_pivot_last_turn: undefined,
+    free_question_required_last_turn: undefined,
+    free_low_signal_last_turn: undefined,
+    free_high_emotion_last_turn: undefined,
     free_robotic_pattern_hit_last_turn: guardedReply.roboticPatternHit,
     free_pre_guard_repeat_type_hit_last_turn: guardedReply.preGuardRepeatTypeHit
   });
@@ -2257,15 +2229,6 @@ export function buildLucySessionViewFree(state: LucySessionState): LucySessionVi
       prompt_version: withFlags.control_flags.prompt_version,
       provider_used: withFlags.control_flags.provider_used_last_turn ?? "none",
       fallback_reason: withFlags.control_flags.fallback_reason ?? "none",
-      policy_mode: withFlags.control_flags.free_policy_mode ?? "adaptive",
-      dialogue_phase: withFlags.control_flags.free_dialogue_phase ?? "opening",
-      dialogue_act: withFlags.control_flags.free_last_dialogue_act ?? "direct_bridge",
-      question_required: withFlags.control_flags.free_question_required_last_turn ?? true,
-      low_signal: withFlags.control_flags.free_low_signal_last_turn ?? false,
-      high_emotion: withFlags.control_flags.free_high_emotion_last_turn ?? false,
-      forced_pivot: withFlags.control_flags.free_policy_forced_pivot_last_turn ?? false,
-      topic_id: withFlags.control_flags.free_topic_id ?? "opening_rapport",
-      topic_turn_count: withFlags.control_flags.free_topic_turn_count ?? 0,
       guard_reason: withFlags.control_flags.free_prompt_guard_reason ?? "none",
       robotic_pattern_hit: withFlags.control_flags.free_robotic_pattern_hit_last_turn ?? false,
       pre_guard_repeat_type_hit: withFlags.control_flags.free_pre_guard_repeat_type_hit_last_turn ?? false

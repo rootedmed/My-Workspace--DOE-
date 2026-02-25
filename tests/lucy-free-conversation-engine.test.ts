@@ -124,6 +124,30 @@ describe("Lucy free conversation engine", () => {
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 
+  it("sends a minimal free-chat prompt without runtime steering metadata blocks", async () => {
+    process.env.GEMINI_API_KEY = "test-key";
+    const fetchMock = vi.fn(async () => geminiTextResponse("Makes sense. What does a healthy relationship look like to you day-to-day?"));
+    vi.stubGlobal("fetch", fetchMock);
+
+    const seed = enableFreeConversationMode(createInitialLucySession("free-user-minimal-prompt"));
+    await processLucyFreeConversationAction(seed, {
+      action: "send",
+      message: "not great",
+      clientMessageId: "free-minimal-prompt-1"
+    });
+
+    const firstCall = fetchMock.mock.calls[0] as unknown[] | undefined;
+    const requestInit = firstCall?.[1] as RequestInit | undefined;
+    const rawBody = typeof requestInit?.body === "string" ? requestInit.body : "";
+
+    expect(rawBody).toContain("Conversation history (most recent last):");
+    expect(rawBody).toContain("Latest user message: not great");
+    expect(rawBody).not.toContain("Runtime steering context");
+    expect(rawBody).not.toContain("dialogue_phase");
+    expect(rawBody).not.toContain("question_required");
+    expect(rawBody).not.toContain("confidence_by_field");
+  });
+
   it("rewrites banned exploratory questions to a forward-moving bridge question", async () => {
     process.env.GEMINI_API_KEY = "test-key";
     const fetchMock = vi.fn(async () =>
