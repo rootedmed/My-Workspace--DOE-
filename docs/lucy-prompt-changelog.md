@@ -83,3 +83,18 @@ All production prompt updates must be logged before rollout.
    - safety flag rate: neutral
 7. **Observed Results (post deploy)**: pending.
 8. **Decision**: pending.
+
+### `lucy-prompt-20260225-01`
+
+1. **Date**: `2026-02-25`
+2. **Owner**: `team`
+3. **Hypothesis**: Adaptive dialogue-act policy in free chat will reduce robotic opener pivots while preserving forward coverage and anti-drill behavior.
+4. **Diff Summary**: Replaced absolute prompt contract with adaptive pacing language; added deterministic policy selection (`opening|middle|closing`, `reflect_only|reflect_then_bridge|clarify_then_bridge|direct_bridge`), low-signal/high-emotion handling, reflect/topic budgets, style normalizer, expanded context window, and guard telemetry.
+5. **Affected Scenarios**: `vague_openers`, `ex_venting_high_frustration`, `tangent_heavy`, `balanced_thoughtful`, `brief_answers`.
+6. **Expected Metric Movement**:
+   - completion: neutral to up
+   - felt_understood: up
+   - extraction accuracy: neutral to up
+   - safety flag rate: neutral
+7. **Observed Results (post deploy)**: pending.
+8. **Decision**: pending.

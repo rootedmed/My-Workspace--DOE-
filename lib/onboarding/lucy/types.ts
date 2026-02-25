@@ -38,6 +38,9 @@ export type LucyLlmProvider = "gemini" | "groq" | "openai" | "openrouter" | "non
 export type ExtractionSpeakerScope = "self" | "partner" | "other";
 export type ExtractionTimeframe = "past" | "current" | "desired";
 export type LucyFreeExtractionPhase = "chat" | "extracting" | "followup" | "manual_gap_fill" | "ready_to_complete";
+export type FreeDialogueAct = "reflect_only" | "reflect_then_bridge" | "clarify_then_bridge" | "direct_bridge";
+export type FreeDialoguePhase = "opening" | "middle" | "closing";
+export type FreePolicyMode = "strict" | "adaptive";
 
 export interface StageState {
   stage_id: LucyStageId;
@@ -104,7 +107,20 @@ export interface ConversationControlFlags {
   free_coverage_score?: number;
   free_coverage_fields_estimated?: LucyAnswerField[];
   free_prompt_guard_hits?: number;
-  free_prompt_guard_reason?: "vague" | "repeat" | "missing_question" | "none";
+  free_prompt_guard_reason?: "vague" | "repeat" | "missing_question" | "style" | "none";
+  free_dialogue_phase?: FreeDialoguePhase;
+  free_last_dialogue_act?: FreeDialogueAct;
+  free_reflect_only_count?: number;
+  free_reflect_only_cooldown_until_turn?: number;
+  free_topic_id?: string;
+  free_topic_turn_count?: number;
+  free_policy_mode?: FreePolicyMode;
+  free_policy_forced_pivot_last_turn?: boolean;
+  free_question_required_last_turn?: boolean;
+  free_low_signal_last_turn?: boolean;
+  free_high_emotion_last_turn?: boolean;
+  free_robotic_pattern_hit_last_turn?: boolean;
+  free_pre_guard_repeat_type_hit_last_turn?: boolean;
   free_gemini_status?:
     | "ok"
     | "retry_ok"
@@ -259,6 +275,18 @@ export interface LucySessionView {
     stage_jump_after_dispute?: boolean;
     explanation_requested?: boolean;
     topic_switch_detected?: boolean;
+    policy_mode?: FreePolicyMode;
+    dialogue_phase?: FreeDialoguePhase;
+    dialogue_act?: FreeDialogueAct;
+    question_required?: boolean;
+    low_signal?: boolean;
+    high_emotion?: boolean;
+    forced_pivot?: boolean;
+    topic_id?: string;
+    topic_turn_count?: number;
+    guard_reason?: string;
+    robotic_pattern_hit?: boolean;
+    pre_guard_repeat_type_hit?: boolean;
   };
   freeMode?: {
     enabled: boolean;

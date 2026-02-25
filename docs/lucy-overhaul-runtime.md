@@ -50,7 +50,29 @@ Primary free runtime event remains:
 
 `lucy_free_turn_processed`
 
-Payload keys are unchanged during this cutover.
+Payload now includes adaptive policy and guard quality fields:
+
+1. `policy_mode`
+2. `dialogue_phase`
+3. `dialogue_act`
+4. `question_required`
+5. `low_signal`
+6. `high_emotion`
+7. `forced_pivot`
+8. `topic_id`
+9. `topic_turn_count`
+10. `guard_reason`
+11. `robotic_pattern_hit`
+12. `pre_guard_repeat_type_hit`
+
+## Policy Controls
+
+Free chat policy mode is controlled by:
+
+1. `LUCY_FREE_POLICY_MODE=strict|adaptive` (default `adaptive`)
+2. `LUCY_FREE_POLICY_ADAPTIVE_PERCENT=0..100` (default `100`)
+
+Adaptive mode uses stable user hashing for rollout.
 
 ## Phase 2 Cleanup Plan
 

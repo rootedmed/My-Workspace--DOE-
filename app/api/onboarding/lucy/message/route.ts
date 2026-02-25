@@ -140,6 +140,18 @@ export async function POST(request: Request) {
     const geminiBlockReason = nextState.control_flags.free_gemini_block_reason ?? null;
     const geminiErrorCode = nextState.control_flags.free_gemini_error_code ?? null;
     const turnNumber = nextView.telemetry?.turn_number ?? 0;
+    const policyMode = nextState.control_flags.free_policy_mode ?? "adaptive";
+    const dialoguePhase = nextState.control_flags.free_dialogue_phase ?? "opening";
+    const dialogueAct = nextState.control_flags.free_last_dialogue_act ?? "direct_bridge";
+    const questionRequired = nextState.control_flags.free_question_required_last_turn ?? true;
+    const lowSignal = nextState.control_flags.free_low_signal_last_turn ?? false;
+    const highEmotion = nextState.control_flags.free_high_emotion_last_turn ?? false;
+    const forcedPivot = nextState.control_flags.free_policy_forced_pivot_last_turn ?? false;
+    const topicId = nextState.control_flags.free_topic_id ?? "opening_rapport";
+    const topicTurnCount = nextState.control_flags.free_topic_turn_count ?? 0;
+    const guardReason = nextState.control_flags.free_prompt_guard_reason ?? "none";
+    const roboticPatternHit = nextState.control_flags.free_robotic_pattern_hit_last_turn ?? false;
+    const preGuardRepeatTypeHit = nextState.control_flags.free_pre_guard_repeat_type_hit_last_turn ?? false;
 
     logStructured("info", "lucy_free_turn_processed", {
       user_id: user.id,
@@ -153,6 +165,18 @@ export async function POST(request: Request) {
       gemini_finish_reason: geminiFinishReason,
       gemini_block_reason: geminiBlockReason,
       gemini_error_code: geminiErrorCode,
+      policy_mode: policyMode,
+      dialogue_phase: dialoguePhase,
+      dialogue_act: dialogueAct,
+      question_required: questionRequired,
+      low_signal: lowSignal,
+      high_emotion: highEmotion,
+      forced_pivot: forcedPivot,
+      topic_id: topicId,
+      topic_turn_count: topicTurnCount,
+      guard_reason: guardReason,
+      robotic_pattern_hit: roboticPatternHit,
+      pre_guard_repeat_type_hit: preGuardRepeatTypeHit,
       session_id: nextState.session_id
     });
 

@@ -209,9 +209,52 @@ function rowToState(row: LucySessionRow): LucySessionState {
         control.free_prompt_guard_reason === "vague" ||
         control.free_prompt_guard_reason === "repeat" ||
         control.free_prompt_guard_reason === "missing_question" ||
+        control.free_prompt_guard_reason === "style" ||
         control.free_prompt_guard_reason === "none"
           ? control.free_prompt_guard_reason
           : "none",
+      free_dialogue_phase:
+        control.free_dialogue_phase === "opening" ||
+        control.free_dialogue_phase === "middle" ||
+        control.free_dialogue_phase === "closing"
+          ? control.free_dialogue_phase
+          : undefined,
+      free_last_dialogue_act:
+        control.free_last_dialogue_act === "reflect_only" ||
+        control.free_last_dialogue_act === "reflect_then_bridge" ||
+        control.free_last_dialogue_act === "clarify_then_bridge" ||
+        control.free_last_dialogue_act === "direct_bridge"
+          ? control.free_last_dialogue_act
+          : undefined,
+      free_reflect_only_count:
+        typeof control.free_reflect_only_count === "number" &&
+        Number.isFinite(control.free_reflect_only_count)
+          ? Math.max(0, Math.round(control.free_reflect_only_count))
+          : 0,
+      free_reflect_only_cooldown_until_turn:
+        typeof control.free_reflect_only_cooldown_until_turn === "number" &&
+        Number.isFinite(control.free_reflect_only_cooldown_until_turn)
+          ? Math.max(0, Math.round(control.free_reflect_only_cooldown_until_turn))
+          : 0,
+      free_topic_id:
+        typeof control.free_topic_id === "string" && control.free_topic_id.trim().length > 0
+          ? control.free_topic_id.trim()
+          : undefined,
+      free_topic_turn_count:
+        typeof control.free_topic_turn_count === "number" &&
+        Number.isFinite(control.free_topic_turn_count)
+          ? Math.max(0, Math.round(control.free_topic_turn_count))
+          : 0,
+      free_policy_mode:
+        control.free_policy_mode === "strict" || control.free_policy_mode === "adaptive"
+          ? control.free_policy_mode
+          : undefined,
+      free_policy_forced_pivot_last_turn: Boolean(control.free_policy_forced_pivot_last_turn),
+      free_question_required_last_turn: Boolean(control.free_question_required_last_turn),
+      free_low_signal_last_turn: Boolean(control.free_low_signal_last_turn),
+      free_high_emotion_last_turn: Boolean(control.free_high_emotion_last_turn),
+      free_robotic_pattern_hit_last_turn: Boolean(control.free_robotic_pattern_hit_last_turn),
+      free_pre_guard_repeat_type_hit_last_turn: Boolean(control.free_pre_guard_repeat_type_hit_last_turn),
       free_gemini_status:
         control.free_gemini_status === "ok" ||
         control.free_gemini_status === "retry_ok" ||

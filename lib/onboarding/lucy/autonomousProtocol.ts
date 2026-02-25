@@ -1,5 +1,6 @@
 import { processLucyUserMessageConversational } from "@/lib/onboarding/lucy/conversationalEngine";
 import { createInitialLucySession } from "@/lib/onboarding/lucy/engine";
+import { enableFreeConversationMode, processLucyFreeConversationAction } from "@/lib/onboarding/lucy/freeConversationEngine";
 import type { LucyAnswerField, LucyMessage, LucySessionState } from "@/lib/onboarding/lucy/types";
 import { LUCY_AUTONOMOUS_SCENARIOS, type LucyAutonomousScenario, type ScenarioFieldExpectation } from "@/lib/onboarding/lucy/autonomousScenarios";
 
@@ -83,6 +84,7 @@ export interface LucyAutonomousIterationReport {
 }
 
 export interface LucyAutonomousRunOptions {
+  engine?: "free_chat" | "conversational";
   /**
    * If provided, every turn will pass through this function after engine processing.
    * Useful for simulating DB save/load round-trips and catching hydration bugs.
@@ -524,13 +526,24 @@ async function runSingleScenario(
   scenario: LucyAutonomousScenario,
   options?: LucyAutonomousRunOptions
 ): Promise<LucyScenarioRunResult> {
+  const engine = options?.engine ?? "free_chat";
   let state = createInitialLucySession(`autonomous-${scenario.id}`);
+  if (engine === "free_chat") {
+    state = enableFreeConversationMode(state);
+  }
   const exchanges: Exchange[] = [];
 
   for (let index = 0; index < scenario.turns.length; index += 1) {
     const user = scenario.turns[index]!;
     const assistantBefore = state.messages.filter((message) => message.role === "assistant").length;
-    state = await processLucyUserMessageConversational(state, user, `${scenario.id}-${index + 1}`);
+    state =
+      engine === "free_chat"
+        ? await processLucyFreeConversationAction(state, {
+            action: "send",
+            message: user,
+            clientMessageId: `${scenario.id}-${index + 1}`
+          })
+        : await processLucyUserMessageConversational(state, user, `${scenario.id}-${index + 1}`);
     if (options?.roundTripStateEachTurn) {
       state = await options.roundTripStateEachTurn(state);
     }
@@ -546,6 +559,34 @@ async function runSingleScenario(
     const assistantAfter = assistants.length;
     if (assistantAfter === assistantBefore) {
       exchanges[exchanges.length - 1]!.assistant = "(no assistant reply)";
+    }
+  }
+
+  if (engine === "free_chat") {
+    const assistantBefore = state.messages.filter((message) => message.role === "assistant").length;
+    state = await processLucyFreeConversationAction(state, { action: "finish" });
+    if (state.control_flags.free_followup_pending) {
+      state = await processLucyFreeConversationAction(state, {
+        action: "send",
+        message:
+          "When stressed I need validation, I open up after trust, I show care through time and words, and I want alignment.",
+        clientMessageId: `${scenario.id}-followup`
+      });
+      state = await processLucyFreeConversationAction(state, { action: "finish" });
+    }
+    if (options?.roundTripStateEachTurn) {
+      state = await options.roundTripStateEachTurn(state);
+    }
+    const assistants = state.messages.filter((message) => message.role === "assistant");
+    const assistantAfter = assistants.length;
+    if (assistantAfter > assistantBefore) {
+      const lastAssistant = assistants[assistants.length - 1];
+      exchanges.push({
+        turn: scenario.turns.length + 1,
+        user: "(finish)",
+        assistant: lastAssistant?.content ?? "(no assistant reply)",
+        assistant_kind: lastAssistant?.kind ?? "none"
+      });
     }
   }
 

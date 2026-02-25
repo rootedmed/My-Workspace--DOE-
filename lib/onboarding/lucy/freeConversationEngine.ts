@@ -1,9 +1,12 @@
 import JSON5 from "json5";
 import { QUICK_OPTIONS } from "@/lib/onboarding/lucy/config";
-import { detectSafetyType } from "@/lib/onboarding/lucy/detectors";
+import { detectHighEmotionCue, detectSafetyType, detectVagueResponse, isUncertainAnswer } from "@/lib/onboarding/lucy/detectors";
 import { extractForStage, hasAllRequiredAnswers, parseQuickModeAnswer } from "@/lib/onboarding/lucy/extractors";
 import { LUCY_FREE_CHAT_SYSTEM_PROMPT, LUCY_FREE_EXTRACTION_SYSTEM_PROMPT } from "@/lib/onboarding/lucy/systemPrompt";
 import type {
+  FreeDialogueAct,
+  FreeDialoguePhase,
+  FreePolicyMode,
   LucyAnswerField,
   LucyAnswers,
   LucyFreeExtractionPhase,
@@ -114,8 +117,31 @@ type FreeSteeringSnapshot = {
   suggestedField: LucyAnswerField | null;
 };
 
-type PromptGuardReason = "vague" | "repeat" | "missing_question" | "none";
+type PromptGuardReason = "vague" | "repeat" | "missing_question" | "style" | "none";
 type OutgoingQuestionType = LucyAnswerField | "exploratory";
+type TopicId = LucyAnswerField | "opening_rapport" | "other";
+
+type FreeDialoguePolicy = {
+  mode: FreePolicyMode;
+  phase: FreeDialoguePhase;
+  act: FreeDialogueAct;
+  requireQuestion: boolean;
+  forcedPivot: boolean;
+  anchorField: LucyAnswerField;
+  lowSignal: boolean;
+  highEmotion: boolean;
+  topicId: TopicId;
+  topicTurnCount: number;
+  topicBudgetRemaining: number;
+};
+
+type PromptGuardMeta = {
+  content: string;
+  reason: PromptGuardReason;
+  questionType: OutgoingQuestionType;
+  preGuardRepeatTypeHit: boolean;
+  roboticPatternHit: boolean;
+};
 
 const REQUIRED_FIELDS: LucyAnswerField[] = [
   "past_attribution",
@@ -137,6 +163,46 @@ const STEERING_PRIORITY_ORDER: LucyAnswerField[] = [
   "growth_intention",
   "love_expression",
   "relational_strengths"
+];
+const OPENING_ANCHOR_ORDER: LucyAnswerField[] = [
+  "past_attribution",
+  "support_need",
+  "relationship_vision",
+  "emotional_openness",
+  "conflict_speed",
+  "growth_intention",
+  "love_expression",
+  "relational_strengths"
+];
+const POLICY_DIMENSION_PRIORITY: LucyAnswerField[] = STEERING_PRIORITY_ORDER;
+const REFLECT_ONLY_MAX_TOTAL = 2;
+const REFLECT_ONLY_MAX_CONSECUTIVE = 1;
+const TOPIC_MAX_TURNS_DEFAULT = 2;
+const TOPIC_MAX_TURNS_HIGH_EMOTION = 3;
+const TRANSCRIPT_PROMPT_WINDOW = 40;
+const LOW_SIGNAL_SHORT_WORD_LIMIT = 7;
+const GENERIC_NEGATIVE_PATTERNS = [
+  /\bnot (that )?great\b/i,
+  /\bcould be better\b/i,
+  /\bmeh\b/i,
+  /\brough\b/i,
+  /\bidk\b/i,
+  /\bdepends\b/i,
+  /\bnot sure\b/i,
+  /\bit'?s complicated\b/i,
+  /\bwhatever\b/i
+];
+const CONFLICT_CUE_PATTERNS = [
+  /\bconflict\b/i,
+  /\bargument\b/i,
+  /\bfight\b/i,
+  /\btension\b/i,
+  /\bresolve\b/i
+];
+const ROBOTIC_STEM_PATTERNS = [
+  /\bdifferent angle\b[:\-,]?\s*/gi,
+  /\bquick shift\b[:\-,]?\s*/gi,
+  /\bi need (this|that) one answer before we continue\b/gi
 ];
 
 const BANNED_EXPLORATORY_PATTERNS: RegExp[] = [
@@ -309,8 +375,238 @@ function normalizePhase(value: unknown): LucyFreeExtractionPhase | undefined {
     : undefined;
 }
 
+function normalizeDialoguePhase(value: unknown): FreeDialoguePhase | undefined {
+  return value === "opening" || value === "middle" || value === "closing" ? value : undefined;
+}
+
+function normalizeDialogueAct(value: unknown): FreeDialogueAct | undefined {
+  return value === "reflect_only" ||
+    value === "reflect_then_bridge" ||
+    value === "clarify_then_bridge" ||
+    value === "direct_bridge"
+    ? value
+    : undefined;
+}
+
+function normalizePolicyMode(value: unknown): FreePolicyMode | undefined {
+  return value === "strict" || value === "adaptive" ? value : undefined;
+}
+
+function parsePolicyModeEnv(raw: string | undefined): FreePolicyMode {
+  if (typeof raw !== "string") return "adaptive";
+  const normalized = raw.trim().toLowerCase();
+  if (normalized === "strict" || normalized === "adaptive") {
+    return normalized;
+  }
+  return "adaptive";
+}
+
+function parseAdaptivePercentEnv(raw: string | undefined): number {
+  const value = Number(raw ?? "100");
+  if (!Number.isFinite(value)) return 100;
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function stablePercentHash(input: string): number {
+  let hash = 0;
+  for (let index = 0; index < input.length; index += 1) {
+    hash = (hash * 31 + input.charCodeAt(index)) >>> 0;
+  }
+  return hash % 100;
+}
+
+function resolvePolicyModeForState(state: LucySessionState): FreePolicyMode {
+  const configured = parsePolicyModeEnv(process.env.LUCY_FREE_POLICY_MODE);
+  if (configured === "strict") return "strict";
+  const rolloutPercent = parseAdaptivePercentEnv(process.env.LUCY_FREE_POLICY_ADAPTIVE_PERCENT);
+  if (rolloutPercent >= 100) return "adaptive";
+  if (rolloutPercent <= 0) return "strict";
+  const bucket = stablePercentHash(state.user_id || state.session_id || "lucy");
+  return bucket < rolloutPercent ? "adaptive" : "strict";
+}
+
 function missingFields(state: LucySessionState): LucyAnswerField[] {
   return REQUIRED_FIELDS.filter((field) => !hasValue(state, field));
+}
+
+function wordCount(text: string): number {
+  const parts = text.trim().split(/\s+/).filter((entry) => entry.length > 0);
+  return parts.length;
+}
+
+function hasConflictCue(text: string): boolean {
+  return CONFLICT_CUE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function hasGenericNegativeSignal(text: string): boolean {
+  return GENERIC_NEGATIVE_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+function inferTopicId(message: string, relatedFields: LucyAnswerField[]): TopicId {
+  if (relatedFields.length > 0) return relatedFields[0] ?? "other";
+  if (wordCount(message) <= LOW_SIGNAL_SHORT_WORD_LIMIT) return "opening_rapport";
+  return "other";
+}
+
+function conversationPhaseFromState(
+  state: LucySessionState,
+  steering: FreeSteeringSnapshot
+): FreeDialoguePhase {
+  const userTurns = countUserTurns(state.messages);
+  const missingCount = REQUIRED_FIELDS.filter((field) => steering.confidenceByField[field] < 70).length;
+  if (state.completed || missingCount === 0) return "closing";
+  if (userTurns <= 3 || steering.coverageScore < 38) return "opening";
+  return "middle";
+}
+
+function pickNextUncoveredField(
+  steering: FreeSteeringSnapshot,
+  exclusions: LucyAnswerField[] = [],
+  priority: LucyAnswerField[] = POLICY_DIMENSION_PRIORITY
+): LucyAnswerField {
+  const blocked = new Set(exclusions);
+  for (const field of priority) {
+    if (steering.confidenceByField[field] < 70 && !blocked.has(field)) {
+      return field;
+    }
+  }
+  for (const field of priority) {
+    if (!blocked.has(field)) return field;
+  }
+  return priority[0]!;
+}
+
+function selectAnchorField(
+  steering: FreeSteeringSnapshot,
+  relatedFields: LucyAnswerField[],
+  phase: FreeDialoguePhase,
+  latestUserMessage: string,
+  exclusions: LucyAnswerField[] = []
+): LucyAnswerField {
+  const blocked = new Set(exclusions);
+  const conflictAllowed = hasConflictCue(latestUserMessage);
+  const relatedByPriority = POLICY_DIMENSION_PRIORITY.filter(
+    (field) => relatedFields.includes(field) && steering.confidenceByField[field] < 70 && !blocked.has(field)
+  );
+  const noConflictStartRelated = relatedByPriority.filter(
+    (field) => field !== "conflict_speed" || conflictAllowed
+  );
+  if (noConflictStartRelated.length > 0) {
+    return noConflictStartRelated[0]!;
+  }
+
+  if (phase === "opening") {
+    const opening = OPENING_ANCHOR_ORDER.find((field) => {
+      if (blocked.has(field)) return false;
+      if (steering.confidenceByField[field] >= 70) return false;
+      if (field === "conflict_speed" && !conflictAllowed) return false;
+      return true;
+    });
+    if (opening) return opening;
+  }
+
+  const unresolved = POLICY_DIMENSION_PRIORITY.find((field) => {
+    if (blocked.has(field)) return false;
+    if (steering.confidenceByField[field] >= 70) return false;
+    if (phase === "opening" && field === "conflict_speed" && !conflictAllowed) return false;
+    return true;
+  });
+  if (unresolved) return unresolved;
+
+  return pickNextUncoveredField(steering, exclusions, OPENING_ANCHOR_ORDER);
+}
+
+function shouldUseReflectOnly(
+  state: LucySessionState,
+  lowSignal: boolean,
+  highEmotion: boolean
+): boolean {
+  const reflectTotal = state.control_flags.free_reflect_only_count ?? 0;
+  const lastAct = normalizeDialogueAct(state.control_flags.free_last_dialogue_act);
+  const userTurns = countUserTurns(state.messages);
+  const cooldownUntil = state.control_flags.free_reflect_only_cooldown_until_turn ?? 0;
+  const cooldownBlocked = userTurns < cooldownUntil;
+  if (!highEmotion || !lowSignal) return false;
+  if (reflectTotal >= REFLECT_ONLY_MAX_TOTAL) return false;
+  if (lastAct === "reflect_only" && REFLECT_ONLY_MAX_CONSECUTIVE <= 1) return false;
+  if (cooldownBlocked) return false;
+  return true;
+}
+
+function selectDialoguePolicy(
+  state: LucySessionState,
+  latestUserMessage: string,
+  steering: FreeSteeringSnapshot
+): FreeDialoguePolicy {
+  const mode = resolvePolicyModeForState(state);
+  const phase = conversationPhaseFromState(state, steering);
+  const relatedFields = relatedFieldsForMessage(latestUserMessage);
+  const uncertain = isUncertainAnswer(latestUserMessage);
+  const vague = detectVagueResponse(latestUserMessage) !== null;
+  const short = wordCount(latestUserMessage) <= LOW_SIGNAL_SHORT_WORD_LIMIT;
+  const lowSignal =
+    !steering.latestHadSignal &&
+    relatedFields.length === 0 &&
+    (vague || uncertain || short || hasGenericNegativeSignal(latestUserMessage));
+  const highEmotion = detectHighEmotionCue(latestUserMessage);
+
+  const topicId = inferTopicId(latestUserMessage, relatedFields);
+  const previousTopic = state.control_flags.free_topic_id;
+  const nextTopicTurnCount =
+    previousTopic && previousTopic === topicId
+      ? (state.control_flags.free_topic_turn_count ?? 0) + 1
+      : 1;
+  const topicBudget = highEmotion && (topicId === "past_attribution" || topicId === "support_need")
+    ? TOPIC_MAX_TURNS_HIGH_EMOTION
+    : TOPIC_MAX_TURNS_DEFAULT;
+  const forcedPivot = nextTopicTurnCount > topicBudget;
+  const topicBudgetRemaining = Math.max(0, topicBudget - nextTopicTurnCount);
+  const lowSignalStreak = state.control_flags.free_low_signal_streak ?? 0;
+  const anchorField = selectAnchorField(
+    steering,
+    relatedFields,
+    phase,
+    latestUserMessage,
+    previousTopic && REQUIRED_FIELDS.includes(previousTopic as LucyAnswerField)
+      ? [previousTopic as LucyAnswerField]
+      : []
+  );
+
+  let act: FreeDialogueAct = "direct_bridge";
+  let requireQuestion = true;
+  if (mode === "strict") {
+    act = "direct_bridge";
+    requireQuestion = true;
+  } else if (forcedPivot) {
+    act = "direct_bridge";
+    requireQuestion = true;
+  } else if (shouldUseReflectOnly(state, lowSignal, highEmotion)) {
+    act = "reflect_only";
+    requireQuestion = false;
+  } else if (phase === "opening" && lowSignal) {
+    act = "reflect_then_bridge";
+    requireQuestion = true;
+  } else if (lowSignalStreak >= 2) {
+    act = "clarify_then_bridge";
+    requireQuestion = true;
+  } else {
+    act = "direct_bridge";
+    requireQuestion = true;
+  }
+
+  return {
+    mode,
+    phase,
+    act,
+    requireQuestion,
+    forcedPivot,
+    anchorField,
+    lowSignal,
+    highEmotion,
+    topicId,
+    topicTurnCount: nextTopicTurnCount,
+    topicBudgetRemaining
+  };
 }
 
 function confidenceLevel(confidence: number): FreeCoverageLevel {
@@ -423,15 +719,69 @@ function pickBridgeQuestion(field: LucyAnswerField, seed: number): string {
   return questions[Math.abs(seed) % questions.length] ?? questions[0]!;
 }
 
+function normalizeLucyStyle(content: string): { text: string; roboticPatternHit: boolean } {
+  let normalized = content.replace(/\s+/g, " ").trim();
+  let roboticPatternHit = false;
+  for (const pattern of ROBOTIC_STEM_PATTERNS) {
+    if (pattern.test(normalized)) roboticPatternHit = true;
+    pattern.lastIndex = 0;
+    normalized = normalized.replace(pattern, "");
+  }
+  normalized = normalized.replace(/\s+/g, " ").trim();
+  return { text: normalized, roboticPatternHit };
+}
+
+function clampSentenceCount(content: string, maxSentences: number): string {
+  const parts = splitSentences(content);
+  if (parts.length <= maxSentences) {
+    return parts.join(" ").replace(/\s+/g, " ").trim();
+  }
+  return parts
+    .slice(0, maxSentences)
+    .join(" ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function removeQuestions(content: string): string {
+  const nonQuestions = splitSentences(content)
+    .filter((entry) => !entry.includes("?"))
+    .map((entry) => entry.replace(/\?/g, "").trim());
+  return nonQuestions.join(" ").replace(/\s+/g, " ").trim();
+}
+
+function buildReflectOnlyReply(content: string, policy: FreeDialoguePolicy): string {
+  const style = normalizeLucyStyle(content);
+  const stripped = removeQuestions(style.text);
+  const first = shortAckSentence(stripped || style.text || "Got it.");
+  const second = policy.highEmotion
+    ? "You're not overreacting."
+    : "You're making sense.";
+  return clampSentenceCount(`${first} ${second}`, 2);
+}
+
 function applyPromptGuard(
   state: LucySessionState,
   content: string,
   latestUserMessage: string,
-  steering: FreeSteeringSnapshot
-): { content: string; reason: PromptGuardReason } {
-  const normalized = content.replace(/\s+/g, " ").trim();
+  steering: FreeSteeringSnapshot,
+  policy: FreeDialoguePolicy
+): PromptGuardMeta {
+  const styleBefore = normalizeLucyStyle(content);
+  const normalized = styleBefore.text;
   const seed = countUserTurns(state.messages) + latestUserMessage.length;
-  const ack = shortAckSentence(normalized);
+  if (!policy.requireQuestion) {
+    const reflectReply = buildReflectOnlyReply(normalized, policy);
+    return {
+      content: reflectReply,
+      reason: styleBefore.roboticPatternHit ? "style" : "none",
+      questionType: "exploratory",
+      preGuardRepeatTypeHit: false,
+      roboticPatternHit: styleBefore.roboticPatternHit
+    };
+  }
+
+  const ack = shortAckSentence(removeQuestions(normalized) || normalized);
   const existingQuestions = splitQuestionLikeSegments(normalized);
   const firstQuestion = existingQuestions[0]?.replace(/\s+/g, " ").trim() ?? "";
   const recentQuestions = recentAssistantQuestions(state.messages, 3).map((entry) => normalizeQuestionStem(entry));
@@ -441,15 +791,16 @@ function applyPromptGuard(
   let reason: PromptGuardReason = "none";
   let question = firstQuestion;
   let questionType: OutgoingQuestionType = question ? classifyQuestionType(question) : "exploratory";
+  const preGuardRepeatTypeHit =
+    questionType !== "exploratory" &&
+    lastType === questionType &&
+    lastConsecutiveTypeRun(recentTypes, questionType) >= 1;
 
   if (!question) {
     reason = "missing_question";
   } else {
     const repeatedQuestion = recentQuestions.includes(normalizeQuestionStem(question));
-    const repeatedType =
-      questionType !== "exploratory" &&
-      lastType === questionType &&
-      lastConsecutiveTypeRun(recentTypes, questionType) >= 1;
+    const repeatedType = preGuardRepeatTypeHit;
     const exploratory = questionType === "exploratory" || isBannedExploratoryQuestion(question);
 
     if (exploratory) {
@@ -459,32 +810,62 @@ function applyPromptGuard(
     }
   }
 
+  const exclusions: OutgoingQuestionType[] = [];
+  if (questionType !== "exploratory") exclusions.push(questionType);
+  if (lastType && lastType !== "exploratory") exclusions.push(lastType);
+
+  const anchorRepeatBlocked =
+    lastType === policy.anchorField &&
+    lastConsecutiveTypeRun(recentTypes, policy.anchorField) >= 1;
+  let replacementField = policy.anchorField;
+  if (anchorRepeatBlocked) {
+    replacementField = pickPriorityField(steering, [...exclusions, replacementField]);
+  }
+
   if (reason !== "none") {
-    const exclusions: OutgoingQuestionType[] = [];
-    if (questionType !== "exploratory") exclusions.push(questionType);
-    if (lastType && lastType !== "exploratory") exclusions.push(lastType);
-    const nextField = pickPriorityField(steering, exclusions);
-    question = pickBridgeQuestion(nextField, seed);
-    questionType = nextField;
+    question = pickBridgeQuestion(replacementField, seed);
+    questionType = replacementField;
+  } else if (policy.forcedPivot && questionType !== replacementField) {
+    question = pickBridgeQuestion(replacementField, seed);
+    questionType = replacementField;
+    reason = "style";
+  } else if (policy.lowSignal && policy.phase === "opening" && questionType !== policy.anchorField) {
+    question = pickBridgeQuestion(replacementField, seed);
+    questionType = replacementField;
+    reason = "style";
+  } else if (questionType !== "exploratory" && steering.confidenceByField[questionType] >= 70) {
+    question = pickBridgeQuestion(replacementField, seed);
+    questionType = replacementField;
+    reason = "style";
+  }
+
+  if (questionType === "exploratory") {
+    question = pickBridgeQuestion(replacementField, seed);
+    questionType = replacementField;
+    reason = reason === "none" ? "vague" : reason;
   }
 
   const finalQuestion = question.endsWith("?") ? question : `${question.replace(/[.!]+$/, "")}?`;
   const finalContent = `${ack} ${finalQuestion}`.replace(/\s+/g, " ").trim();
-  const forceReason = reason === "none" && !finalQuestion ? "missing_question" : reason;
   if (!finalQuestion) {
-    const fallbackField = pickPriorityField(steering, lastType ? [lastType] : []);
-    return { content: `${ack} ${pickBridgeQuestion(fallbackField, seed)}`.replace(/\s+/g, " ").trim(), reason: "missing_question" };
-  }
-
-  if (reason === "none" && questionType === "exploratory") {
-    const fallbackField = pickPriorityField(steering, lastType ? [lastType] : []);
+    const fallbackField = pickPriorityField(steering, lastType ? [lastType] : [policy.anchorField]);
     return {
       content: `${ack} ${pickBridgeQuestion(fallbackField, seed)}`.replace(/\s+/g, " ").trim(),
-      reason: "vague"
+      reason: "missing_question",
+      questionType: fallbackField,
+      preGuardRepeatTypeHit,
+      roboticPatternHit: styleBefore.roboticPatternHit
     };
   }
 
-  return { content: finalContent, reason: forceReason };
+  const normalizedFinal = normalizeLucyStyle(finalContent);
+  return {
+    content: clampSentenceCount(normalizedFinal.text, 2),
+    reason,
+    questionType,
+    preGuardRepeatTypeHit,
+    roboticPatternHit: styleBefore.roboticPatternHit || normalizedFinal.roboticPatternHit
+  };
 }
 
 function shouldShowWrapNudge(state: LucySessionState, steering: FreeSteeringSnapshot): boolean {
@@ -1148,7 +1529,7 @@ function buildContinuationPrompt(
 ): string {
   return [
     "Conversation history (most recent last):",
-    transcript(state.messages, 28) || "(no history)",
+    transcript(state.messages, TRANSCRIPT_PROMPT_WINDOW) || "(no history)",
     "",
     `Latest user message: ${latestUserMessage}`,
     "",
@@ -1185,7 +1566,8 @@ function mergeContinuationReply(firstText: string, continuationText: string): st
 function buildFreeChatPrompt(
   state: LucySessionState,
   latestUserMessage: string,
-  steering: FreeSteeringSnapshot
+  steering: FreeSteeringSnapshot,
+  policy: FreeDialoguePolicy
 ): string {
   const userTurnCount = countUserTurns(state.messages);
   const recentQuestions = recentAssistantQuestions(state.messages, 2);
@@ -1195,12 +1577,21 @@ function buildFreeChatPrompt(
     .map((field) => `${field}:${steering.levelByField[field]}(${steering.confidenceByField[field]})`)
     .join(" | ");
   const unresolvedPriority = STEERING_PRIORITY_ORDER.filter((field) => steering.confidenceByField[field] < 70);
+  const openingContextUsers = state.messages
+    .filter((entry) => entry.role === "user")
+    .slice(0, 2)
+    .map((entry) => entry.content)
+    .join(" | ");
+  const openingContextAssistant =
+    state.messages.find((entry) => entry.role === "assistant")?.content ?? "none";
 
   return [
     "Conversation history (most recent last):",
-    transcript(state.messages, 28) || "(no history)",
+    transcript(state.messages, TRANSCRIPT_PROMPT_WINDOW) || "(no history)",
     "",
     `Latest user message: ${latestUserMessage}`,
+    `Opening context users: ${openingContextUsers || "none"}`,
+    `Opening context first assistant: ${openingContextAssistant}`,
     "",
     "Runtime steering context:",
     `- user_turn_count: ${userTurnCount}`,
@@ -1214,11 +1605,26 @@ function buildFreeChatPrompt(
     `- unresolved_by_priority: ${unresolvedPriority.join(", ") || "none"}`,
     `- preferred_next_dimension: ${steering.suggestedField ?? "none"}`,
     `- confidence_by_dimension: ${renderedCoverage}`,
+    `- dialogue_phase: ${policy.phase}`,
+    `- dialogue_act: ${policy.act}`,
+    `- question_required: ${policy.requireQuestion ? "yes" : "no"}`,
+    `- low_signal: ${policy.lowSignal ? "yes" : "no"}`,
+    `- high_emotion: ${policy.highEmotion ? "yes" : "no"}`,
+    `- topic_id: ${policy.topicId}`,
+    `- topic_turn_count: ${policy.topicTurnCount}`,
+    `- topic_budget_remaining: ${policy.topicBudgetRemaining}`,
+    `- forced_pivot: ${policy.forcedPivot ? "yes" : "no"}`,
+    `- anchor_dimension: ${policy.anchorField}`,
+    `- policy_mode: ${policy.mode}`,
     "",
-    "Hard pacing rules: one short acknowledgment sentence max, then one forward-moving question.",
-    "Never ask banned exploratory prompts and never repeat the same question type as last turn.",
-    "If latest_turn_signal_hit=no, ask one clarifier only, then pivot to preferred_next_dimension.",
-    "If latest_turn_signal_hit=yes, extract and bridge immediately to preferred_next_dimension.",
+    "Adaptive pacing rules:",
+    "- Use one short, human acknowledgment first.",
+    "- If question_required=yes, ask one forward-moving question only.",
+    "- If question_required=no, send a reflective response with no question mark.",
+    "- Never ask banned exploratory prompts.",
+    "- Do not repeat the same question type on back-to-back turns.",
+    "- If low_signal=yes and opening phase, bridge gently from their words before deeper pivots.",
+    "- Limited reflective turns are allowed, but the next turn must progress.",
     "Reply as Lucy now. Follow system rules exactly."
   ].join("\n");
 }
@@ -1289,9 +1695,10 @@ function fallbackNoticeForFailure(status: GeminiCallStatus, result: GeminiCallRe
 async function generateLucyReply(
   state: LucySessionState,
   latestUserMessage: string,
-  steering: FreeSteeringSnapshot
+  steering: FreeSteeringSnapshot,
+  policy: FreeDialoguePolicy
 ): Promise<GeneratedLucyReply> {
-  const prompt = buildFreeChatPrompt(state, latestUserMessage, steering);
+  const prompt = buildFreeChatPrompt(state, latestUserMessage, steering, policy);
   const first = await callGemini(LUCY_FREE_CHAT_SYSTEM_PROMPT, prompt, {
     json: false,
     maxTokens: 640,
@@ -1536,9 +1943,41 @@ function ensureFreeFlagDefaults(state: LucySessionState): LucySessionState {
       state.control_flags.free_prompt_guard_reason === "vague" ||
       state.control_flags.free_prompt_guard_reason === "repeat" ||
       state.control_flags.free_prompt_guard_reason === "missing_question" ||
+      state.control_flags.free_prompt_guard_reason === "style" ||
       state.control_flags.free_prompt_guard_reason === "none"
         ? state.control_flags.free_prompt_guard_reason
         : "none",
+    free_dialogue_phase:
+      normalizeDialoguePhase(state.control_flags.free_dialogue_phase) ??
+      (state.completed ? "closing" : "opening"),
+    free_last_dialogue_act:
+      normalizeDialogueAct(state.control_flags.free_last_dialogue_act) ?? "direct_bridge",
+    free_reflect_only_count:
+      typeof state.control_flags.free_reflect_only_count === "number" &&
+      Number.isFinite(state.control_flags.free_reflect_only_count)
+        ? Math.max(0, Math.round(state.control_flags.free_reflect_only_count))
+        : 0,
+    free_reflect_only_cooldown_until_turn:
+      typeof state.control_flags.free_reflect_only_cooldown_until_turn === "number" &&
+      Number.isFinite(state.control_flags.free_reflect_only_cooldown_until_turn)
+        ? Math.max(0, Math.round(state.control_flags.free_reflect_only_cooldown_until_turn))
+        : 0,
+    free_topic_id:
+      typeof state.control_flags.free_topic_id === "string" && state.control_flags.free_topic_id.trim().length > 0
+        ? state.control_flags.free_topic_id.trim()
+        : "opening_rapport",
+    free_topic_turn_count:
+      typeof state.control_flags.free_topic_turn_count === "number" &&
+      Number.isFinite(state.control_flags.free_topic_turn_count)
+        ? Math.max(0, Math.round(state.control_flags.free_topic_turn_count))
+        : 0,
+    free_policy_mode: normalizePolicyMode(state.control_flags.free_policy_mode) ?? resolvePolicyModeForState(state),
+    free_policy_forced_pivot_last_turn: Boolean(state.control_flags.free_policy_forced_pivot_last_turn),
+    free_question_required_last_turn: Boolean(state.control_flags.free_question_required_last_turn),
+    free_low_signal_last_turn: Boolean(state.control_flags.free_low_signal_last_turn),
+    free_high_emotion_last_turn: Boolean(state.control_flags.free_high_emotion_last_turn),
+    free_robotic_pattern_hit_last_turn: Boolean(state.control_flags.free_robotic_pattern_hit_last_turn),
+    free_pre_guard_repeat_type_hit_last_turn: Boolean(state.control_flags.free_pre_guard_repeat_type_hit_last_turn),
     free_gemini_status:
       state.control_flags.free_gemini_status === "ok" ||
       state.control_flags.free_gemini_status === "retry_ok" ||
@@ -1678,23 +2117,41 @@ async function handleUserMessage(state: LucySessionState, message: string, clien
   }
 
   const steering = estimateSteeringSnapshot(next, text);
-  const nextLowSignalStreak = steering.latestHadSignal ? 0 : (next.control_flags.free_low_signal_streak ?? 0) + 1;
+  const policy = selectDialoguePolicy(next, text, steering);
+  const nextLowSignalStreak = policy.lowSignal ? (next.control_flags.free_low_signal_streak ?? 0) + 1 : 0;
   const chatState = withFreeFlags(next, {
     free_extraction_phase: "chat",
     free_coverage_score: steering.coverageScore,
     free_coverage_fields_estimated: steering.estimatedCoveredFields,
-    free_low_signal_streak: nextLowSignalStreak
+    free_low_signal_streak: nextLowSignalStreak,
+    free_policy_mode: policy.mode,
+    free_dialogue_phase: policy.phase,
+    free_topic_id: policy.topicId,
+    free_topic_turn_count: policy.topicTurnCount
   });
-  const generated = await generateLucyReply(chatState, text, steering);
+  const generated = await generateLucyReply(chatState, text, steering, policy);
   const providerUsed = generated.providerUsed;
+  const providerNoneStyle = normalizeLucyStyle(generated.content);
   const guardedReply =
     providerUsed === "none"
-      ? { content: generated.content, reason: "none" as PromptGuardReason }
-      : applyPromptGuard(chatState, generated.content, text, steering);
+      ? {
+          content: providerNoneStyle.text,
+          reason: "none" as PromptGuardReason,
+          questionType: "exploratory" as OutgoingQuestionType,
+          preGuardRepeatTypeHit: false,
+          roboticPatternHit: providerNoneStyle.roboticPatternHit
+        }
+      : applyPromptGuard(chatState, generated.content, text, steering, policy);
   const wrapNudge = shouldShowWrapNudge(chatState, steering);
   const finalContent = wrapNudge
     ? `${guardedReply.content} If this feels accurate, you can tap “I’m done” any time.`
     : guardedReply.content;
+  const reflectOnlyCount =
+    (chatState.control_flags.free_reflect_only_count ?? 0) + (policy.act === "reflect_only" ? 1 : 0);
+  const reflectCooldown =
+    policy.act === "reflect_only"
+      ? countUserTurns(chatState.messages) + 1
+      : Math.max(0, chatState.control_flags.free_reflect_only_cooldown_until_turn ?? 0);
   const withReplyFlags = withFreeFlags(chatState, {
     free_gemini_status: generated.geminiStatus,
     free_gemini_http_status: generated.geminiHttpStatus ?? undefined,
@@ -1706,7 +2163,20 @@ async function handleUserMessage(state: LucySessionState, message: string, clien
     free_prompt_guard_hits:
       (chatState.control_flags.free_prompt_guard_hits ?? 0) + (guardedReply.reason === "none" ? 0 : 1),
     free_prompt_guard_reason: guardedReply.reason,
-    free_wrap_nudge_shown: wrapNudge ? true : Boolean(chatState.control_flags.free_wrap_nudge_shown)
+    free_wrap_nudge_shown: wrapNudge ? true : Boolean(chatState.control_flags.free_wrap_nudge_shown),
+    free_dialogue_phase: policy.phase,
+    free_last_dialogue_act: policy.act,
+    free_reflect_only_count: reflectOnlyCount,
+    free_reflect_only_cooldown_until_turn: reflectCooldown,
+    free_topic_id: policy.topicId,
+    free_topic_turn_count: policy.topicTurnCount,
+    free_policy_mode: policy.mode,
+    free_policy_forced_pivot_last_turn: policy.forcedPivot,
+    free_question_required_last_turn: policy.requireQuestion,
+    free_low_signal_last_turn: policy.lowSignal,
+    free_high_emotion_last_turn: policy.highEmotion,
+    free_robotic_pattern_hit_last_turn: guardedReply.roboticPatternHit,
+    free_pre_guard_repeat_type_hit_last_turn: guardedReply.preGuardRepeatTypeHit
   });
 
   return addAssistantMessage(withReplyFlags, finalContent, "normal");
@@ -1786,7 +2256,19 @@ export function buildLucySessionViewFree(state: LucySessionState): LucySessionVi
       model_version: withFlags.control_flags.model_version,
       prompt_version: withFlags.control_flags.prompt_version,
       provider_used: withFlags.control_flags.provider_used_last_turn ?? "none",
-      fallback_reason: withFlags.control_flags.fallback_reason ?? "none"
+      fallback_reason: withFlags.control_flags.fallback_reason ?? "none",
+      policy_mode: withFlags.control_flags.free_policy_mode ?? "adaptive",
+      dialogue_phase: withFlags.control_flags.free_dialogue_phase ?? "opening",
+      dialogue_act: withFlags.control_flags.free_last_dialogue_act ?? "direct_bridge",
+      question_required: withFlags.control_flags.free_question_required_last_turn ?? true,
+      low_signal: withFlags.control_flags.free_low_signal_last_turn ?? false,
+      high_emotion: withFlags.control_flags.free_high_emotion_last_turn ?? false,
+      forced_pivot: withFlags.control_flags.free_policy_forced_pivot_last_turn ?? false,
+      topic_id: withFlags.control_flags.free_topic_id ?? "opening_rapport",
+      topic_turn_count: withFlags.control_flags.free_topic_turn_count ?? 0,
+      guard_reason: withFlags.control_flags.free_prompt_guard_reason ?? "none",
+      robotic_pattern_hit: withFlags.control_flags.free_robotic_pattern_hit_last_turn ?? false,
+      pre_guard_repeat_type_hit: withFlags.control_flags.free_pre_guard_repeat_type_hit_last_turn ?? false
     },
     freeMode: {
       enabled: true,

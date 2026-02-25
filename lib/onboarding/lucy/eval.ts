@@ -1,8 +1,15 @@
-import { processLucyUserMessageConversational } from "@/lib/onboarding/lucy/conversationalEngine";
 import { createInitialLucySession } from "@/lib/onboarding/lucy/engine";
+import { processLucyUserMessageConversational } from "@/lib/onboarding/lucy/conversationalEngine";
+import { enableFreeConversationMode, processLucyFreeConversationAction } from "@/lib/onboarding/lucy/freeConversationEngine";
 import { hasAllRequiredAnswers } from "@/lib/onboarding/lucy/extractors";
 import type { LucyMessage, LucySessionState } from "@/lib/onboarding/lucy/types";
 import type { LucyEvalScenario } from "@/lib/onboarding/lucy/evalScenarios";
+
+export type LucyEvalEngine = "free_chat" | "conversational";
+
+export interface LucyEvalRunOptions {
+  engine?: LucyEvalEngine;
+}
 
 export interface LucyEvalScores {
   felt_understood: number;
@@ -137,13 +144,37 @@ function scoreCompletionLikelihood(state: LucySessionState): number {
   return clampScore(1 + (filled / 8) * 4);
 }
 
-export async function replayLucyScenario(scenario: LucyEvalScenario): Promise<LucyEvalResult> {
+export async function replayLucyScenario(scenario: LucyEvalScenario, options?: LucyEvalRunOptions): Promise<LucyEvalResult> {
+  const engine = options?.engine ?? "free_chat";
   try {
     let state = createInitialLucySession(`eval-${scenario.id}`);
+    if (engine === "free_chat") {
+      state = enableFreeConversationMode(state);
+    }
     let turn = 0;
     for (const userTurn of scenario.turns) {
       turn += 1;
-      state = await processLucyUserMessageConversational(state, userTurn, `${scenario.id}-${turn}`);
+      state =
+        engine === "free_chat"
+          ? await processLucyFreeConversationAction(state, {
+              action: "send",
+              message: userTurn,
+              clientMessageId: `${scenario.id}-${turn}`
+            })
+          : await processLucyUserMessageConversational(state, userTurn, `${scenario.id}-${turn}`);
+    }
+
+    if (engine === "free_chat") {
+      state = await processLucyFreeConversationAction(state, { action: "finish" });
+      if (state.control_flags.free_followup_pending) {
+        state = await processLucyFreeConversationAction(state, {
+          action: "send",
+          message:
+            "When stressed I need validation, I open up after trust, I show care through time and words, and I want alignment.",
+          clientMessageId: `${scenario.id}-followup`
+        });
+        state = await processLucyFreeConversationAction(state, { action: "finish" });
+      }
     }
 
     const assistant = assistantMessages(state);
@@ -209,6 +240,9 @@ export async function replayLucyScenario(scenario: LucyEvalScenario): Promise<Lu
   }
 }
 
-export async function runLucyScenarioSuite(scenarios: LucyEvalScenario[]): Promise<LucyEvalResult[]> {
-  return Promise.all(scenarios.map((scenario) => replayLucyScenario(scenario)));
+export async function runLucyScenarioSuite(
+  scenarios: LucyEvalScenario[],
+  options?: LucyEvalRunOptions
+): Promise<LucyEvalResult[]> {
+  return Promise.all(scenarios.map((scenario) => replayLucyScenario(scenario, options)));
 }

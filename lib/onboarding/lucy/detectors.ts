@@ -66,6 +66,20 @@ const EXTERNAL_CAPABILITY_PATTERNS = [
   /\b(send|write)\s+(an )?(email|message|dm)\b/i,
   /\bcall\b/i
 ];
+const HIGH_EMOTION_PATTERNS = [
+  /\btrauma\b/i,
+  /\babus(e|ive)\b/i,
+  /\bpanic\b/i,
+  /\banxious\b/i,
+  /\bdevastat(ed|ing)\b/i,
+  /\bheartbroken\b/i,
+  /\bshattered\b/i,
+  /\bworthless\b/i,
+  /\bcan't stop (crying|thinking)\b/i,
+  /\bso alone\b/i,
+  /\btrigger(ed|ing)\b/i,
+  /\bspiral(ing)?\b/i
+];
 
 export function normalizeText(input: string): string {
   return input.trim().toLowerCase();
@@ -172,6 +186,12 @@ export function isExternalCapabilityRequest(rawInput: string): boolean {
   const text = rawInput.trim();
   if (!text) return false;
   return EXTERNAL_CAPABILITY_PATTERNS.some((pattern) => pattern.test(text));
+}
+
+export function detectHighEmotionCue(rawInput: string): boolean {
+  const text = rawInput.trim();
+  if (!text) return false;
+  return HIGH_EMOTION_PATTERNS.some((pattern) => pattern.test(text));
 }
 
 export function parseStageSelection(rawInput: string): number | null {

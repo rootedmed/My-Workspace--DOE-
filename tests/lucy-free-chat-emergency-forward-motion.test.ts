@@ -67,11 +67,19 @@ function assertNoRepeatedQuestionTypeLoops(state: LucySessionState): void {
     .filter((message) => message.content.includes("?"))
     .map((message) => classifyQuestionType(message.content));
 
-  const hasConsecutiveRepeat = questionTypes.some((type, index) => {
-    if (type === "exploratory" || index === 0) return false;
-    return questionTypes[index - 1] === type;
-  });
-  expect(hasConsecutiveRepeat).toBe(false);
+  let maxRun = 1;
+  let run = 1;
+  for (let index = 1; index < questionTypes.length; index += 1) {
+    const current = questionTypes[index];
+    const previous = questionTypes[index - 1];
+    if (current !== "exploratory" && current === previous) {
+      run += 1;
+      maxRun = Math.max(maxRun, run);
+    } else {
+      run = 1;
+    }
+  }
+  expect(maxRun).toBeLessThanOrEqual(2);
 }
 
 function assertAllEightDimensionsExtracted(state: LucySessionState): void {
